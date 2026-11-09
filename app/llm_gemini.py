@@ -17,6 +17,7 @@ class GeminiPlaywright(ChatGPTPlaywright):
     """
 
     PAGE_HOSTS = ["gemini.google.com", "accounts.google.com"]
+    LOGIN_SERVICE = "Gemini"
 
     INPUT_SELECTORS = [
         "div.ql-editor[contenteditable='true']",
