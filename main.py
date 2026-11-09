@@ -18,7 +18,7 @@ from app.live2d_viewer import Live2DViewer
 from app.tts_voicevox import VoiceVoxTTS
 
 
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.8.0"
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ def _resolve_project_path(path_value: str) -> str:
     return str(path.resolve())
 
 
-def create_llm(config: dict) -> LLMBackend:
+def create_llm(config: dict, login_callback=None, stop_event=None) -> LLMBackend:
     """設定に応じてLLMバックエンドを生成する。"""
     backend = str(config.get("llm_backend", "chatgpt")).lower()
 
@@ -157,6 +157,8 @@ def create_llm(config: dict) -> LLMBackend:
         "use_real_edge_profile": bool(
             config.get("use_real_edge_profile", False)
         ),
+        "login_callback": login_callback,
+        "stop_event": stop_event,
     }
 
     if backend == "gemini":
@@ -226,8 +228,10 @@ def create_live2d_viewer(config: dict) -> Live2DViewer | None:
 
 def create_tts(
     config: dict,
-    ui: ConsoleUI,
-    viewer: Live2DViewer | None,
+    ui: ConsoleUI | None,
+    viewer,
+    playback_callback=None,
+    stop_event=None,
 ) -> VoiceVoxTTS:
     """VOICEVOXを生成し、再生進捗と口パクのコールバックを接続する。"""
     mouth_scale = float(config.get("live2d_mouth_scale", 3.0))
@@ -252,13 +256,74 @@ def create_tts(
         split_by_sentence=bool(
             config.get("tts_split_by_sentence", False)
         ),
-        playback_callback=ui.update_playback,
+        playback_callback=(
+            playback_callback
+            if playback_callback is not None
+            else (ui.update_playback if ui is not None else None)
+        ),
+        stop_event=stop_event,
+    )
+
+
+def run_gui(config: dict) -> int:
+    """PySide6 GUIモードを起動する。"""
+    try:
+        from app.gui import run_gui as start_gui
+    except ImportError:
+        logger.exception(
+            "GUIを起動できません。PySide6をインストールしてください。"
+            "従来のCLIモードを使う場合は gui_enabled: false にしてください。"
+        )
+        return 1
+
+    def llm_factory(login_callback, stop_event):
+        return create_llm(
+            config,
+            login_callback=login_callback,
+            stop_event=stop_event,
+        )
+
+    def tts_factory(viewer, playback_callback, stop_event):
+        return create_tts(
+            config,
+            ui=None,
+            viewer=viewer,
+            playback_callback=playback_callback,
+            stop_event=stop_event,
+        )
+
+    return start_gui(
+        config=config,
+        llm_factory=llm_factory,
+        tts_factory=tts_factory,
+        parse_response=parse_emotion_response,
     )
 
 
 def main() -> int:
-    """アプリケーションのメイン処理。"""
+    """設定に応じてGUIまたは従来CLIを起動する。"""
     setup_logging()
+    try:
+        config = load_config()
+        setup_logging(config)
+        logger.info("春日部つむぎAI v%s を開始します。", APP_VERSION)
+        if bool(config.get("gui_enabled", True)):
+            return run_gui(config)
+        return run_cli(config)
+    except KeyboardInterrupt:
+        logger.info("終了します。")
+        return 0
+    except Exception as exc:
+        logger.error(
+            "アプリケーションの初期化に失敗しました: %s",
+            exc,
+            exc_info=True,
+        )
+        return 1
+
+
+def run_cli(config: dict) -> int:
+    """GUIを無効にした場合の従来CLIモード。"""
 
     llm: LLMBackend | None = None
     tts: VoiceVoxTTS | None = None
@@ -272,8 +337,6 @@ def main() -> int:
     print()
 
     try:
-        config = load_config()
-        setup_logging(config)
         logger.info("春日部つむぎAI v%s を開始します。", APP_VERSION)
         ui = ConsoleUI()
 
