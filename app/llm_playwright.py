@@ -1,8 +1,11 @@
 import logging
+import os
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
-from playwright.sync_api import BrowserContext, Locator, Page, Playwright, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright, sync_playwright
 
 from app.llm_base import LLMBackend
 
@@ -36,6 +39,7 @@ class ChatGPTPlaywright(LLMBackend):
         chat_timeout: float = 3600.0,
         stable_seconds: float = 3.0,
         poll_interval: float = 0.5,
+        cdp_port: int = 9222,
     ) -> None:
         self.chatgpt_url = chatgpt_url
         self.browser_profile_dir = browser_profile_dir
@@ -43,42 +47,98 @@ class ChatGPTPlaywright(LLMBackend):
         self.max_wait_seconds = chat_timeout
         self.stable_seconds = stable_seconds
         self.poll_interval = poll_interval
+        self.cdp_port = cdp_port
         self.playwright: Playwright | None = None
+        self.browser: Browser | None = None
         self.context: BrowserContext | None = None
         self.page: Page | None = None
+        self.edge_process: subprocess.Popen | None = None
         self._system_prompt_sent = False
 
+    @staticmethod
+    def _find_edge_executable() -> str:
+        """msedge.exe のパスを探す。"""
+        candidates = [
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+            / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+        found = shutil.which("msedge")
+        if found:
+            return found
+        raise RuntimeError(
+            "Microsoft Edge (msedge.exe) が見つかりません。"
+            "Edgeがインストールされているか確認してください。"
+        )
+
     def _start(self) -> None:
-        """Edgeを起動し、ChatGPTを開く。"""
+        """Edgeを通常アプリとして起動し、CDPで接続してChatGPTを開く。
+
+        Playwrightから直接起動すると自動操作フラグが付き、Cloudflareの
+        人間確認がループするため、Edgeは通常プロセスとして先に起動し、
+        Playwrightは connect_over_cdp で後から接続する。
+        """
         if self.page is not None:
             return
         profile_dir = Path(self.browser_profile_dir).resolve()
         profile_dir.mkdir(parents=True, exist_ok=True)
+        self.playwright = sync_playwright().start()
+        endpoint = f"http://127.0.0.1:{self.cdp_port}"
+        # 既に同じポートでEdgeが起動していなければ、通常プロセスとして起動する
         try:
-            self.playwright = sync_playwright().start()
-            self.context = self.playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
-                channel="msedge",
-                headless=False,
-                args=[
+            self.browser = self.playwright.chromium.connect_over_cdp(endpoint, timeout=3_000)
+        except Exception:
+            self.browser = None
+        if self.browser is None:
+            edge_path = self._find_edge_executable()
+            logger.info("Microsoft Edgeを起動しています（CDPポート: %s）", self.cdp_port)
+            self.edge_process = subprocess.Popen(
+                [
+                    edge_path,
+                    f"--remote-debugging-port={self.cdp_port}",
+                    f"--user-data-dir={profile_dir}",
                     "--start-maximized",
-                    # Cloudflare の人間確認がループする対策:
-                    # 自動操作ブラウザであることを示すフラグを抑える
-                    "--disable-blink-features=AutomationControlled",
-                ],
-                ignore_default_args=["--enable-automation"],
+                    self.chatgpt_url,
+                ]
             )
-            # navigator.webdriver を消してボット判定を緩和する
+            deadline = time.monotonic() + 30.0
+            last_error: Exception | None = None
+            while time.monotonic() < deadline:
+                try:
+                    self.browser = self.playwright.chromium.connect_over_cdp(
+                        endpoint, timeout=3_000
+                    )
+                    break
+                except Exception as exc:  # Edgeの起動待ちでリトライする
+                    last_error = exc
+                    time.sleep(1.0)
+            if self.browser is None:
+                raise RuntimeError(
+                    "Microsoft EdgeへのCDP接続に失敗しました。"
+                ) from last_error
+        if self.browser.contexts:
+            self.context = self.browser.contexts[0]
+        else:
+            self.context = self.browser.new_context()
+        # navigator.webdriver を消してボット判定をさらに緩和する
+        try:
             self.context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
             )
-        except Exception as exc:
-            raise RuntimeError("Microsoft Edgeの起動に失敗しました。") from exc
-        self.page = self.context.new_page()
-        try:
-            self.page.goto(self.chatgpt_url, wait_until="domcontentloaded", timeout=60_000)
-        except Exception as exc:
-            raise RuntimeError("ChatGPTのページを開くことができませんでした。") from exc
+        except Exception:
+            pass
+        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+        if not self.page.url.startswith(self.chatgpt_url):
+            try:
+                self.page.goto(self.chatgpt_url, wait_until="domcontentloaded", timeout=60_000)
+            except Exception as exc:
+                raise RuntimeError("ChatGPTのページを開くことができませんでした。") from exc
 
     def _wait_for_login(self) -> Locator:
         """ログインしていない場合、手動ログインを待つ。"""
@@ -244,13 +304,25 @@ class ChatGPTPlaywright(LLMBackend):
         return response
 
     def close(self) -> None:
-        """EdgeとPlaywrightを終了する。"""
-        if self.context is not None:
+        """Playwrightの接続を切り、自分で起動したEdgeを終了する。"""
+        if self.browser is not None:
             try:
-                self.context.close()
+                self.browser.close()
             except Exception:
                 pass
-            self.context = None
+            self.browser = None
+        self.context = None
+        if self.edge_process is not None:
+            try:
+                if self.edge_process.poll() is None:
+                    self.edge_process.terminate()
+                    try:
+                        self.edge_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.edge_process.kill()
+            except Exception:
+                pass
+            self.edge_process = None
         if self.playwright is not None:
             try:
                 self.playwright.stop()

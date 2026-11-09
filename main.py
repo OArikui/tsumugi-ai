@@ -53,6 +53,7 @@ def create_llm(config: dict) -> LLMBackend:
         chatgpt_url=config["chatgpt_url"],
         browser_profile_dir=_expand_profile_dir(config["browser_profile_dir"]),
         system_prompt=config["system_prompt"],
+        cdp_port=int(config.get("cdp_port", 9222)),
     )
 
 
