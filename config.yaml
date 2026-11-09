@@ -1,5 +1,6 @@
 voicevox_url: "http://127.0.0.1:50021"
 speaker: 8
+tts_split_by_sentence: false
 llm_backend: "gemini"
 browser_profile_dir: "./browser_profile"
 use_real_edge_profile: false

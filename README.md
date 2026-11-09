@@ -47,6 +47,7 @@ python -m playwright install msedge
 
 - `voicevox_url`: VOICEVOXのURL
 - `speaker`: VOICEVOXのスピーカーID（春日部つむぎ = 8）
+- `tts_split_by_sentence`: `true` の場合は文単位で合成・再生する。既定は `false`（全文を一括合成してから再生。文ごとに間が空かない）
 - `llm_backend`: 使用するLLM（`gemini` または `chatgpt`）
 - `browser_profile_dir`: 専用Edgeのプロファイルディレクトリ（プロジェクト直下の `./browser_profile`）
 - `use_real_edge_profile`: `true` の場合は普段使いのEdgeプロファイルを使う（起動前にEdgeを完全に閉じること。アプリ終了時に普段のEdgeは閉じない）。既定は `false`（専用プロファイル）
@@ -76,6 +77,7 @@ python -m playwright install msedge
 
 ## バージョン
 
+- v0.4.0 — 音声の再生方式を変更。全文を一括で合成してから再生するようにし、文ごとの間が空く問題を解消。あわせてコンソールに [待機中] / [処理中] の状態表示を追加。文単位の合成は `tts_split_by_sentence: true` で従来通り使える
 - v0.3.1 — `use_real_edge_profile` の既定値を `false`（専用プロファイル）に変更。実プロファイル方式は、Edge が裏で起動していると CDP 接続できない制約があるため、Gemini では専用プロファイルを標準とする。実プロファイル方式自体はオプションとして残してある
 - v0.3.0 — Gemini バックエンド（`app/llm_gemini.py`）を追加し、`config.yaml` の `llm_backend` で ChatGPT と切り替え可能にした。あわせて普段使いの Edge プロファイルを使う `use_real_edge_profile` オプションを追加（ChatGPT は Cloudflare の検証が突破できないため一旦休止し、Gemini を試行）
 - v0.2.0 — Edge の起動方式を CDP 接続に変更。Edge を通常プロセスとして起動し、Playwright が後から接続する方式にしたことで、Cloudflare の人間確認がループする問題への対策を強化
