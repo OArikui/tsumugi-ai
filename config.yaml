@@ -68,3 +68,10 @@ log_dir: "logs"
 # GUI
 # falseにすると従来のCLI入力モードを使用します。
 gui_enabled: true
+
+# Phase 3: 音声入力（Push-to-Talk）
+stt_enabled: true
+stt_model: "small"
+stt_language: "ja"
+stt_mode: "push_to_talk"
+stt_auto_send: true

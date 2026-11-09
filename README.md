@@ -2,7 +2,7 @@
 
 Gemini / ChatGPT WebとVOICEVOXを連携させたデスクトップ音声対話アプリケーションです。通常はPySide6 GUIを使用し、config.yaml の gui_enabled を false にすると従来のCLIモードで起動します。使用するLLMは llm_backend で切り替えます。
 
-v0.8.0ではPySide6 GUIを追加し、Live2D・会話表示・入力・状態表示を1つのウィンドウに統合しました。v0.7.0の感情表現と自然な休憩動作も維持しています。
+v0.9.0ではfaster-whisperによる日本語の音声入力（Push-to-Talk）を追加しました。v0.8.0のGUI・Live2D統合とv0.7.0の感情表現・自然な休憩動作も維持しています。
 
 ## 必要環境
 
@@ -12,6 +12,7 @@ v0.8.0ではPySide6 GUIを追加し、Live2D・会話表示・入力・状態表
 - VOICEVOX
 - インターネット接続
 - PySide6（GUIモード。requirements.txtからインストール）
+- faster-whisper（音声入力を使用する場合）
 
 Live2Dを使用する場合は、追加で以下が必要です。
 
@@ -69,6 +70,26 @@ gui_enabled: false
 ~~~
 
 終了する場合はGUIの「終了」またはウィンドウ右上の閉じるボタンを押してください。CLIモードでは exit または Ctrl+C を使用します。
+
+## 音声入力（Phase 3）
+
+既定ではPush-to-Talk方式です。GUIでは「🎤 音声入力」を押して録音を開始し、「録音停止」を押すと録音を止めて文字起こしします。文字起こし結果は stt_auto_send が true ならそのまま送信し、false なら入力欄に入れて確認・編集できます。つむぎが音声を生成・再生している間は、誤認識防止のためマイクボタンを無効にします。
+
+CLIでは入力待ちの空Enterで録音開始、録音中にもう一度Enterで停止・文字起こしを行います。stt_auto_send が false の場合は認識結果を表示するだけで、会話へは自動送信しません。
+
+faster-whisperのモデルは初回起動時にダウンロードされます。既定の small モデルは約500 MBのダウンロードが発生するため、初回はネットワーク接続と空き容量を確保してください。モデルのロード・ダウンロードはGUIではワーカースレッドで実行されます。
+
+マイクがない、faster-whisperが未導入、モデルのダウンロードに失敗した場合は警告ログを出して音声入力だけを無効化します。テキスト入力と音声対話はそのまま利用できます。
+
+設定例:
+
+~~~yaml
+stt_enabled: true
+stt_model: "small"
+stt_language: "ja"
+stt_mode: "push_to_talk"
+stt_auto_send: true
+~~~
 
 ---
 
@@ -204,6 +225,11 @@ gui_enabled: true
 | log_to_file | 実行ごとのログファイルを出力するか | true |
 | log_dir | ログの保存先（相対パスはプロジェクトルート基準） | logs |
 | gui_enabled | GUIを使用するか。falseなら従来のCLIモード | true |
+| stt_enabled | 音声入力を使用するか | true |
+| stt_model | faster-whisperのモデル名 | small |
+| stt_language | 文字起こし言語コード | ja |
+| stt_mode | 録音方式（現在はpush_to_talk） | push_to_talk |
+| stt_auto_send | 認識結果を自動送信するか | true |
 
 設定キーがconfig.yamlに存在しない場合は、main.py側の既定値を使用します。
 
@@ -344,6 +370,15 @@ Live2Dの初期化に失敗しても、VOICEVOXとLLMによる音声対話は継
 - 公式モデルでは PARAM_MOUTH_OPEN_Y、PARAM_EYE_L_OPEN、PARAM_EYE_R_OPEN などの大文字形式が使われる場合があります。
 - 口のIDは live2d_mouth_param で明示指定できます。
 
+### 音声入力が使えない
+
+- Windowsの設定でマイクが接続・有効になっているか確認してください。
+- faster-whisperがインストールされているか確認してください。
+- 初回のモデルダウンロードが完了するまで待ってから再起動してください。
+- 音声入力を使わずに起動する場合は `stt_enabled: false` にしてください。
+
+音声入力の初期化や録音に失敗しても、テキスト入力は継続して使えます。
+
 ### VOICEVOXに接続できない
 
 - VOICEVOXが起動しているか確認してください。
@@ -373,6 +408,7 @@ config.yamlの llm_backend を gemini または chatgpt に変更します。
 
 # バージョン履歴
 
+- v0.9.0 — Phase 3。sounddeviceによるPush-to-Talk録音とfaster-whisperによる日本語文字起こしを追加。GUIのマイクボタン・認識結果の自動送信/入力欄への反映、CLIの空Enterによる録音操作に対応。マイク・モデル・依存パッケージが利用できない場合は音声入力のみを無効化し、テキスト入力を継続。
 - v0.8.0 — PySide6 GUIを追加し、Live2DをQOpenGLWidgetへ統合。入力・会話履歴・状態表示・終了操作を1つのウィンドウに集約。LLM問い合わせとVOICEVOX音声合成・再生をワーカースレッド化し、GUI上のログイン完了ダイアログ、終了時の協調停止、gui_enabledによるCLIモード切り替えに対応。
 - v0.7.0 — LLMの先頭感情タグを解析して読み上げ文から除去し、Live2D表情APIまたは表情パラメータプリセットで感情表現を追加。20秒以上の無発話時に閉眼・視線移動・小さな首振りを行う自然な休憩状態、Live2D既定有効化、実行ごとのUTF-8ログファイル出力に対応。
 - v0.6.1 — 公式Live2Dモデルの PARAM_ 形式パラメータIDに対応。口・眼・呼吸パラメータを大文字小文字を区別せず自動解決し、live2d_mouth_param による口パラメータの明示指定を追加。待機中の角度・体のゆらゆら揺れと live2d_idle_sway 設定を追加。

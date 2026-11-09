@@ -71,12 +71,16 @@ class ConversationWorker(QThread):
     assistant_message = Signal(str)
     error_occurred = Signal(str)
     turn_finished = Signal()
+    stt_ready = Signal(bool, str)
+    recording_changed = Signal(bool)
+    transcript_ready = Signal(str)
 
     def __init__(
         self,
         llm: Any,
         tts: Any,
         viewer: Live2DWidget,
+        stt: Any | None,
         parse_response: Callable[[str], tuple[str, str]],
         stop_event: threading.Event,
         parent=None,
@@ -85,16 +89,40 @@ class ConversationWorker(QThread):
         self._llm = llm
         self._tts = tts
         self._viewer = viewer
+        self._stt = stt
+        self._stt_ready = False
         self._parse_response = parse_response
         self._stop_event = stop_event
-        self._queue: queue.Queue[str | None] = queue.Queue()
+        self._queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
 
     def submit(self, text: str) -> None:
-        self._queue.put(text)
+        self._queue.put(("text", text))
+
+    def start_recording(self) -> None:
+        self._queue.put(("record_start", None))
+
+    def stop_recording(self) -> None:
+        self._queue.put(("record_stop", None))
 
     def request_stop(self) -> None:
         self._stop_event.set()
-        self._queue.put(None)
+        self._queue.put(("stop", None))
+
+    def _disable_stt(self, reason: str) -> None:
+        logger.warning(
+            "音声入力を無効化します。テキスト入力は引き続き利用できます。理由: %s",
+            reason,
+            exc_info=True,
+        )
+        if self._stt is not None:
+            try:
+                self._stt.close()
+            except Exception:
+                logger.debug("音声入力リソースの終了に失敗しました。", exc_info=True)
+        self._stt = None
+        self._stt_ready = False
+        self.stt_ready.emit(False, reason)
+        self.recording_changed.emit(False)
 
     def run(self) -> None:
         """初期化後、要求を1件ずつ順番に処理する。"""
@@ -109,17 +137,59 @@ class ConversationWorker(QThread):
             if self._stop_event.is_set():
                 return
 
+            if self._stt is not None:
+                self.status_changed.emit("音声入力を準備しています")
+                try:
+                    self._stt.prepare()
+                    self._stt_ready = True
+                    self.stt_ready.emit(True, "")
+                except Exception as exc:
+                    self._disable_stt(str(exc))
+            else:
+                self.stt_ready.emit(False, "")
+
             self.ready.emit()
             self.status_changed.emit("待機中")
             while not self._stop_event.is_set():
                 try:
-                    text = self._queue.get(timeout=0.2)
+                    task, payload = self._queue.get(timeout=0.2)
                 except queue.Empty:
                     continue
 
-                if text is None or self._stop_event.is_set():
+                if task == "stop" or self._stop_event.is_set():
                     break
 
+                if task == "record_start":
+                    if not self._stt_ready or self._stt is None:
+                        continue
+                    try:
+                        self._stt.start_recording()
+                        self.recording_changed.emit(True)
+                        self.status_changed.emit("聞き取り中...")
+                    except Exception as exc:
+                        self._disable_stt(str(exc))
+                        self.status_changed.emit("待機中")
+                    continue
+
+                if task == "record_stop":
+                    if not self._stt_ready or self._stt is None:
+                        continue
+                    try:
+                        self.status_changed.emit("文字起こし中...")
+                        self.recording_changed.emit(False)
+                        recognized_text = self._stt.stop_recording_and_transcribe()
+                        if recognized_text:
+                            self.transcript_ready.emit(recognized_text)
+                        self.status_changed.emit("待機中")
+                    except Exception as exc:
+                        self._disable_stt(str(exc))
+                        self.status_changed.emit("待機中")
+                    continue
+
+                if task != "text" or not payload:
+                    continue
+
+                text = payload
                 try:
                     self.status_changed.emit("考え中")
                     response = self._llm.chat(text)
@@ -156,6 +226,11 @@ class ConversationWorker(QThread):
         finally:
             self._viewer.set_mouth_open(0.0)
             self._viewer.set_emotion("normal")
+            if self._stt is not None:
+                try:
+                    self._stt.close()
+                except Exception:
+                    logger.exception("音声入力の終了処理に失敗しました。")
             try:
                 self._llm.close()
             except Exception:
@@ -177,6 +252,7 @@ class MainWindow(QMainWindow):
             [Live2DWidget, Callable[[float, float], None], threading.Event],
             Any,
         ],
+        stt_factory: Callable[[], Any | None],
         parse_response: Callable[[str], tuple[str, str]],
     ) -> None:
         super().__init__()
@@ -191,6 +267,11 @@ class MainWindow(QMainWindow):
         self._close_requested = False
         self._close_ready = False
         self._ready = False
+        self._stt_available = False
+        self._recording = False
+        self._stt_auto_send = bool(config.get("stt_auto_send", True))
+        self._status_text = "起動しています..."
+        self._turn_pending = False
 
         central = QWidget(self)
         root = QVBoxLayout(central)
@@ -244,7 +325,14 @@ class MainWindow(QMainWindow):
         self.send_button.setEnabled(False)
         self.send_button.setMinimumHeight(42)
         self.send_button.clicked.connect(lambda _checked=False: self._send_message())
+        self.mic_button = QPushButton("🎤 音声入力", conversation_panel)
+        self.mic_button.setEnabled(False)
+        self.mic_button.setMinimumHeight(42)
+        self.mic_button.clicked.connect(
+            lambda _checked=False: self._toggle_microphone()
+        )
         entry_row.addWidget(self.input_field, 1)
+        entry_row.addWidget(self.mic_button)
         entry_row.addWidget(self.send_button)
         conversation_layout.addLayout(entry_row)
         content.addWidget(conversation_panel, 6)
@@ -281,10 +369,17 @@ class MainWindow(QMainWindow):
             self._on_playback_progress,
             self._stop_event,
         )
+        try:
+            self._stt = stt_factory()
+        except Exception as exc:
+            logger.warning("音声入力の準備に失敗しました。テキスト入力で続行します: %s", exc)
+            self._stt = None
+
         self._worker = ConversationWorker(
             self._llm,
             self._tts,
             self.live2d_widget,
+            self._stt,
             parse_response,
             self._stop_event,
             self,
@@ -294,12 +389,20 @@ class MainWindow(QMainWindow):
         self._worker.assistant_message.connect(self._append_assistant_message)
         self._worker.error_occurred.connect(self._show_error)
         self._worker.turn_finished.connect(self._on_turn_finished)
+        self._worker.stt_ready.connect(self._on_stt_ready)
+        self._worker.recording_changed.connect(self._on_recording_changed)
+        self._worker.transcript_ready.connect(self._on_transcript_ready)
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
 
     @Slot(str)
     def _set_status(self, status: str) -> None:
+        self._status_text = status
         self.status_label.setText(status)
+        if status == "待機中" and self._ready and not self._turn_pending:
+            self.input_field.setEnabled(True)
+            self.send_button.setEnabled(True)
+        self._refresh_microphone_button()
         if status == "考え中":
             self.live2d_widget.set_activity("thinking")
         elif status in ("声を生成中", "再生中"):
@@ -311,11 +414,58 @@ class MainWindow(QMainWindow):
         if progress < 1.0:
             self._worker.status_changed.emit("再生中")
 
+    def _refresh_microphone_button(self) -> None:
+        can_start = (
+            self._stt_available
+            and self._ready
+            and not self._close_requested
+            and not self._turn_pending
+            and self._status_text in ("待機中", "聞き取り中...")
+        )
+        self.mic_button.setEnabled(can_start)
+        self.mic_button.setText(
+            "録音停止" if self._recording else "🎤 音声入力"
+        )
+
+    @Slot(bool, str)
+    def _on_stt_ready(self, available: bool, detail: str) -> None:
+        self._stt_available = available
+        if not available and detail:
+            self.hint_label.setText(
+                "音声入力は利用できません。テキスト入力は引き続き使えます。"
+            )
+            logger.warning("音声入力は無効です: %s", detail)
+        elif available:
+            self.hint_label.setText(
+                "マイクボタンで録音し、もう一度押すと文字起こしします。"
+            )
+        self._refresh_microphone_button()
+
+    @Slot(bool)
+    def _on_recording_changed(self, recording: bool) -> None:
+        self._recording = recording
+        if recording:
+            self.input_field.setEnabled(False)
+            self.send_button.setEnabled(False)
+        self._refresh_microphone_button()
+
+    @Slot(str)
+    def _on_transcript_ready(self, transcript: str) -> None:
+        self.input_field.setText(transcript)
+        if self._stt_auto_send:
+            self._submit_text(transcript)
+        else:
+            self.input_field.setEnabled(self._ready and not self._close_requested)
+            self.send_button.setEnabled(self._ready and not self._close_requested)
+            self.input_field.setFocus()
+            self.hint_label.setText("音声認識結果を入力欄に入れました。内容を確認して送信してください。")
+
     @Slot()
     def _on_ready(self) -> None:
         self._ready = True
         self.input_field.setEnabled(True)
         self.send_button.setEnabled(True)
+        self._refresh_microphone_button()
         self.input_field.setFocus()
         self.history.append(
             '<p style="color:#8FA5BD;">準備ができました。会話を始められます。</p>'
@@ -329,9 +479,12 @@ class MainWindow(QMainWindow):
         )
 
     def _send_message(self) -> None:
+        self._submit_text(self.input_field.text())
+
+    def _submit_text(self, value: str) -> None:
         if not self._ready or not self._worker.isRunning():
             return
-        message = self.input_field.text().strip()
+        message = value.strip()
         if not message:
             return
         escaped = html.escape(message).replace("\n", "<br>")
@@ -341,14 +494,28 @@ class MainWindow(QMainWindow):
         self.input_field.clear()
         self.input_field.setEnabled(False)
         self.send_button.setEnabled(False)
+        self._turn_pending = True
+        self._refresh_microphone_button()
         self._worker.submit(message)
+
+    def _toggle_microphone(self) -> None:
+        if not self._stt_available or not self._worker.isRunning():
+            return
+        if self._recording:
+            self.mic_button.setEnabled(False)
+            self._worker.stop_recording()
+        elif self._status_text == "待機中" and not self._turn_pending:
+            self.mic_button.setEnabled(False)
+            self._worker.start_recording()
 
     @Slot()
     def _on_turn_finished(self) -> None:
+        self._turn_pending = False
         if self._ready and not self._close_requested:
             self.input_field.setEnabled(True)
             self.send_button.setEnabled(True)
             self.input_field.setFocus()
+        self._refresh_microphone_button()
 
     @Slot(str)
     def _show_error(self, message: str) -> None:
@@ -419,6 +586,7 @@ class MainWindow(QMainWindow):
         self._ready = False
         self.input_field.setEnabled(False)
         self.send_button.setEnabled(False)
+        self.mic_button.setEnabled(False)
         if self._close_requested:
             self._close_ready = True
             QTimer.singleShot(0, self.close)
@@ -453,6 +621,7 @@ def run_gui(
         [Live2DWidget, Callable[[float, float], None], threading.Event],
         Any,
     ],
+    stt_factory: Callable[[], Any | None],
     parse_response: Callable[[str], tuple[str, str]],
 ) -> int:
     """GUIアプリケーションを起動する。"""
@@ -462,6 +631,12 @@ def run_gui(
     if app is None:
         app = QApplication([])
     app.setApplicationName("春日部つむぎ AI")
-    window = MainWindow(config, llm_factory, tts_factory, parse_response)
+    window = MainWindow(
+        config,
+        llm_factory,
+        tts_factory,
+        stt_factory,
+        parse_response,
+    )
     window.show()
     return app.exec()

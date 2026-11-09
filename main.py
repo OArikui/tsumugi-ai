@@ -15,10 +15,11 @@ from app.llm_base import LLMBackend
 from app.llm_gemini import GeminiPlaywright
 from app.llm_playwright import ChatGPTPlaywright
 from app.live2d_viewer import Live2DViewer
+from app.stt_whisper import SpeechToText
 from app.tts_voicevox import VoiceVoxTTS
 
 
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,19 @@ def create_tts(
     )
 
 
+def create_stt(config: dict) -> SpeechToText | None:
+    """設定に応じて音声認識インスタンスを生成する。モデルのロードは呼び出し側で行う。"""
+    if not bool(config.get("stt_enabled", True)):
+        logger.info("音声入力は設定で無効です。")
+        return None
+
+    return SpeechToText(
+        model_name=str(config.get("stt_model", "small")),
+        language=str(config.get("stt_language", "ja")),
+        mode=str(config.get("stt_mode", "push_to_talk")),
+    )
+
+
 def run_gui(config: dict) -> int:
     """PySide6 GUIモードを起動する。"""
     try:
@@ -292,10 +306,14 @@ def run_gui(config: dict) -> int:
             stop_event=stop_event,
         )
 
+    def stt_factory():
+        return create_stt(config)
+
     return start_gui(
         config=config,
         llm_factory=llm_factory,
         tts_factory=tts_factory,
+        stt_factory=stt_factory,
         parse_response=parse_emotion_response,
     )
 
@@ -328,6 +346,7 @@ def run_cli(config: dict) -> int:
     llm: LLMBackend | None = None
     tts: VoiceVoxTTS | None = None
     viewer: Live2DViewer | None = None
+    stt: SpeechToText | None = None
     ui: ConsoleUI | None = None
 
     print()
@@ -354,9 +373,30 @@ def run_cli(config: dict) -> int:
         with ui.processing("AIを起動しています"):
             llm.start()
 
+        if bool(config.get("stt_enabled", True)):
+            try:
+                stt = create_stt(config)
+                if stt is not None:
+                    logger.info(
+                        "音声認識モデルを準備しています。初回はモデルのダウンロードが発生します。"
+                    )
+                    stt.prepare()
+            except Exception:
+                logger.warning(
+                    "音声入力を利用できないため、テキスト入力で続行します。",
+                    exc_info=True,
+                )
+                if stt is not None:
+                    stt.close()
+                stt = None
+
         print()
         print("準備ができました。")
         print("文章を入力すると、春日部つむぎが返答します。")
+        if stt is not None and stt.is_ready:
+            print("音声入力: 空Enterで録音開始、録音中にもう一度Enterで停止します。")
+        else:
+            print("音声入力は利用できません。テキスト入力は引き続き使用できます。")
         print("終了する場合は exit と入力してください。")
         print(
             "[Live2D] アバター表示: "
@@ -365,16 +405,54 @@ def run_cli(config: dict) -> int:
         print()
 
         while True:
+            prompt = (
+                "録音中 (Enterで停止): "
+                if stt is not None and stt.is_recording
+                else "あなた: "
+            )
             print("[待機中] 文章を入力してください。")
             try:
-                user_text = input("あなた: ").strip()
+                user_text = input(prompt).strip()
             except EOFError:
                 break
 
             if user_text.lower() == "exit":
                 break
+
+            if user_text and stt is not None and stt.is_recording:
+                try:
+                    stt.stop_recording()
+                    logger.info("録音中にテキスト入力されたため、録音を停止しました。")
+                except Exception:
+                    logger.warning("録音停止に失敗しました。音声入力を無効化します。", exc_info=True)
+                    stt.close()
+                    stt = None
+
             if not user_text:
-                continue
+                if stt is None or not stt.is_ready:
+                    continue
+                try:
+                    if not stt.is_recording:
+                        stt.start_recording()
+                        print("聞き取り中... もう一度Enterを押すと停止します。")
+                        continue
+
+                    user_text = stt.stop_recording_and_transcribe()
+                    if not user_text:
+                        print("音声を認識できませんでした。")
+                        continue
+                    print(f"認識結果: {user_text}")
+                    if not bool(config.get("stt_auto_send", True)):
+                        print("stt_auto_send=false のため送信せず、テキスト入力へ戻ります。")
+                        continue
+                except Exception:
+                    logger.warning(
+                        "音声入力に失敗しました。以降はテキスト入力で続行します。",
+                        exc_info=True,
+                    )
+                    stt.close()
+                    stt = None
+                    continue
 
             try:
                 logger.info("LLMに問い合わせています。")
@@ -456,6 +534,12 @@ def run_cli(config: dict) -> int:
                 llm.close()
             except Exception:
                 logger.exception("LLMの終了処理に失敗しました。")
+
+        if stt is not None:
+            try:
+                stt.close()
+            except Exception:
+                logger.exception("音声入力の終了処理に失敗しました。")
 
         if tts is not None:
             try:
