@@ -60,7 +60,17 @@ class ChatGPTPlaywright(LLMBackend):
                 user_data_dir=str(profile_dir),
                 channel="msedge",
                 headless=False,
-                args=["--start-maximized"],
+                args=[
+                    "--start-maximized",
+                    # Cloudflare の人間確認がループする対策:
+                    # 自動操作ブラウザであることを示すフラグを抑える
+                    "--disable-blink-features=AutomationControlled",
+                ],
+                ignore_default_args=["--enable-automation"],
+            )
+            # navigator.webdriver を消してボット判定を緩和する
+            self.context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
             )
         except Exception as exc:
             raise RuntimeError("Microsoft Edgeの起動に失敗しました。") from exc
