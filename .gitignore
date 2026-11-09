@@ -1,0 +1,21 @@
+# Python virtual environment
+.venv/
+
+# Playwright persistent browser profile
+browser_profile/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Logs
+*.log
+app.log
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
