@@ -19,3 +19,7 @@ app.log
 # OS
 .DS_Store
 Thumbs.db
+
+# Live2D model assets and Cubism Core DLL (license: no redistribution)
+assets/
+*.dll

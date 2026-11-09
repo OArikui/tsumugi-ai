@@ -1,12 +1,23 @@
+# VOICEVOX
 voicevox_url: "http://127.0.0.1:50021"
 speaker: 8
+
+# 音声合成
 tts_split_by_sentence: false
+
+# LLMバックエンド: gemini または chatgpt
 llm_backend: "gemini"
+
+# Microsoft Edge
 browser_profile_dir: "./browser_profile"
 use_real_edge_profile: false
 cdp_port: 9222
+
+# LLM Webページ
 chatgpt_url: "https://chatgpt.com/"
 gemini_url: "https://gemini.google.com/app"
+
+# 春日部つむぎとしての応答指示
 system_prompt: |
   あなたは春日部つむぎです。
   明るく自然な日本語で会話してください。
@@ -15,3 +26,24 @@ system_prompt: |
   箇条書き、見出し、Markdown、表記記号は避けてください。
   URLやプログラムコードなど、読み上げに適さない表現はできるだけ避けてください。
   必要以上に長い説明はしないでください。
+
+# Live2D
+# falseの場合、Live2Dを使用せず従来の音声対話のみで動作します。
+live2d_enabled: false
+
+# 公式モデルのCubism 3以降のモデルJSON
+live2d_model_path: "./assets/live2d/tsumugi/春日部つむぎ公式live2Dモデル.model3.json"
+
+# Live2Dウィンドウサイズ
+live2d_width: 480
+live2d_height: 640
+
+# 口パク感度（RMS × mouth_scale）
+live2d_mouth_scale: 3.0
+
+# 口の開閉パラメータID。空文字ならモデルから自動判定する。
+# 公式モデル例: PARAM_MOUTH_OPEN_Y
+live2d_mouth_param: ""
+
+# 待機中の角度・体のゆらゆら揺れ
+live2d_idle_sway: true
