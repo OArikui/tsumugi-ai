@@ -77,6 +77,7 @@ python -m playwright install msedge
 
 ## バージョン
 
+- v0.5.0 — 状態表示をバー表示に変更（`app/console_ui.py`）。処理中は流れるバー、再生中は再生進捗バーと音量メーターをコンソールの1行に表示する
 - v0.4.0 — 音声の再生方式を変更。全文を一括で合成してから再生するようにし、文ごとの間が空く問題を解消。あわせてコンソールに [待機中] / [処理中] の状態表示を追加。文単位の合成は `tts_split_by_sentence: true` で従来通り使える
 - v0.3.1 — `use_real_edge_profile` の既定値を `false`（専用プロファイル）に変更。実プロファイル方式は、Edge が裏で起動していると CDP 接続できない制約があるため、Gemini では専用プロファイルを標準とする。実プロファイル方式自体はオプションとして残してある
 - v0.3.0 — Gemini バックエンド（`app/llm_gemini.py`）を追加し、`config.yaml` の `llm_backend` で ChatGPT と切り替え可能にした。あわせて普段使いの Edge プロファイルを使う `use_real_edge_profile` オプションを追加（ChatGPT は Cloudflare の検証が突破できないため一旦休止し、Gemini を試行）

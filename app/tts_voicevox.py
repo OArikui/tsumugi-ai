@@ -12,6 +12,7 @@ import sounddevice as sd
 logger = logging.getLogger(__name__)
 
 RMSCallback = Callable[[float], None]
+PlaybackCallback = Callable[[float, float], None]
 
 
 class VoiceVoxTTS:
@@ -25,6 +26,7 @@ class VoiceVoxTTS:
         volume: float = 1.0,
         rms_callback: RMSCallback | None = None,
         split_by_sentence: bool = False,
+        playback_callback: PlaybackCallback | None = None,
     ) -> None:
         self.voicevox_url = voicevox_url.rstrip("/")
         self.speaker = speaker
@@ -32,6 +34,7 @@ class VoiceVoxTTS:
         self.volume = max(0.0, min(float(volume), 2.0))
         self.rms_callback = rms_callback
         self.split_by_sentence = split_by_sentence
+        self.playback_callback = playback_callback
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "KasukabeTsumugiAI/1.0"})
 
@@ -122,9 +125,10 @@ class VoiceVoxTTS:
             audio = audio.reshape(-1, 2)
         position = 0
         block_size = 1024
+        last_playback_notice = 0.0
 
         def callback(outdata, frames, time_info, status):
-            nonlocal position
+            nonlocal position, last_playback_notice
             if status:
                 logger.debug("音声再生状態: %s", status)
             total = len(audio)
@@ -142,12 +146,20 @@ class VoiceVoxTTS:
                 outdata[:count] = chunk.reshape(-1, 1)
                 flat = chunk
             position += count
+            rms = float(np.sqrt(np.mean(np.square(flat)))) if flat.size else 0.0
             if self.rms_callback is not None:
-                rms = float(np.sqrt(np.mean(np.square(flat))))
                 try:
                     self.rms_callback(rms)
                 except Exception:
                     logger.warning("RMSコールバックの呼び出しに失敗しました。", exc_info=True)
+            if self.playback_callback is not None:
+                now = time.monotonic()
+                if now - last_playback_notice >= 0.1 or position >= total:
+                    last_playback_notice = now
+                    try:
+                        self.playback_callback(position / total if total else 1.0, rms)
+                    except Exception:
+                        logger.warning("再生進捗コールバックの呼び出しに失敗しました。", exc_info=True)
 
         try:
             with sd.OutputStream(
@@ -161,6 +173,11 @@ class VoiceVoxTTS:
                     time.sleep(0.05)
         except sd.PortAudioError as exc:
             raise RuntimeError("音声を再生できません。Windowsの出力デバイスやサウンド設定を確認してください。") from exc
+        if self.playback_callback is not None:
+            try:
+                self.playback_callback(1.0, 0.0)
+            except Exception:
+                pass
 
     def speak(self, text: str) -> None:
         """テキストを合成・再生する。
