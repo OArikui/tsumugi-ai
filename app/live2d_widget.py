@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import math
 import random
@@ -126,9 +127,17 @@ class Live2DWidget(QOpenGLWidget):
             if not self._controller._load_model_metadata():
                 self._fallback_message = "モデルファイルを読み込めません。"
                 return
-            if not self._controller._check_dependencies():
-                self._fallback_message = "Live2DのPythonパッケージがありません。"
-                return
+            for module_name in ("live2d", "OpenGL"):
+                try:
+                    available = importlib.util.find_spec(module_name) is not None
+                except (ImportError, ValueError, ModuleNotFoundError):
+                    available = False
+                if not available:
+                    self._fallback_message = (
+                        f"Live2Dに必要なPythonパッケージ {module_name} がありません。"
+                    )
+                    logger.warning("%s がないためGUI内Live2Dを省略します。", module_name)
+                    return
             if not self._controller._prepare_core_dll():
                 self._fallback_message = "Cubism Core DLLを利用できません。"
                 return
