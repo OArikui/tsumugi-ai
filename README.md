@@ -159,7 +159,7 @@ tsumugi-ai/
 
 ## 4. config.yamlの設定
 
-Live2Dは既定で無効です。次の設定を変更すると有効になります。
+Live2Dは既定で有効です。モデルやCubism Core DLLが利用できない環境では警告を出し、アバターなしで音声対話を継続します。
 
 ~~~yaml
 live2d_enabled: true
