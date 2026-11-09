@@ -49,7 +49,7 @@ python -m playwright install msedge
 - `speaker`: VOICEVOXのスピーカーID（春日部つむぎ = 8）
 - `llm_backend`: 使用するLLM（`gemini` または `chatgpt`）
 - `browser_profile_dir`: 専用Edgeのプロファイルディレクトリ（プロジェクト直下の `./browser_profile`）
-- `use_real_edge_profile`: `true` の場合は普段使いのEdgeプロファイルを使う（起動前にEdgeを完全に閉じること。アプリ終了時に普段のEdgeは閉じない）
+- `use_real_edge_profile`: `true` の場合は普段使いのEdgeプロファイルを使う（起動前にEdgeを完全に閉じること。アプリ終了時に普段のEdgeは閉じない）。既定は `false`（専用プロファイル）
 - `cdp_port`: EdgeへのCDP接続ポート（既定値 9222）
 - `chatgpt_url`: ChatGPTのURL
 - `gemini_url`: GeminiのURL
@@ -76,6 +76,7 @@ python -m playwright install msedge
 
 ## バージョン
 
+- v0.3.1 — `use_real_edge_profile` の既定値を `false`（専用プロファイル）に変更。実プロファイル方式は、Edge が裏で起動していると CDP 接続できない制約があるため、Gemini では専用プロファイルを標準とする。実プロファイル方式自体はオプションとして残してある
 - v0.3.0 — Gemini バックエンド（`app/llm_gemini.py`）を追加し、`config.yaml` の `llm_backend` で ChatGPT と切り替え可能にした。あわせて普段使いの Edge プロファイルを使う `use_real_edge_profile` オプションを追加（ChatGPT は Cloudflare の検証が突破できないため一旦休止し、Gemini を試行）
 - v0.2.0 — Edge の起動方式を CDP 接続に変更。Edge を通常プロセスとして起動し、Playwright が後から接続する方式にしたことで、Cloudflare の人間確認がループする問題への対策を強化
 - v0.1.2 — Cloudflare の人間確認がループする対策として、Edge 起動時に自動操作フラグ（`--enable-automation` / `navigator.webdriver`）を抑えるよう修正

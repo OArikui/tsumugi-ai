@@ -2,7 +2,7 @@ voicevox_url: "http://127.0.0.1:50021"
 speaker: 8
 llm_backend: "gemini"
 browser_profile_dir: "./browser_profile"
-use_real_edge_profile: true
+use_real_edge_profile: false
 cdp_port: 9222
 chatgpt_url: "https://chatgpt.com/"
 gemini_url: "https://gemini.google.com/app"
