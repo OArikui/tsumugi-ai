@@ -64,3 +64,7 @@ live2d_expressions:
 # 実行ごとのログファイル出力
 log_to_file: true
 log_dir: "logs"
+
+# GUI
+# falseにすると従来のCLI入力モードを使用します。
+gui_enabled: true

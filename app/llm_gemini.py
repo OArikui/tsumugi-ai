@@ -17,6 +17,7 @@ class GeminiPlaywright(ChatGPTPlaywright):
     """
 
     PAGE_HOSTS = ["gemini.google.com", "accounts.google.com"]
+    LOGIN_SERVICE = "Gemini"
 
     INPUT_SELECTORS = [
         "div.ql-editor[contenteditable='true']",
@@ -58,31 +59,5 @@ class GeminiPlaywright(ChatGPTPlaywright):
         return self.page.locator("model-response message-content")
 
     def _wait_for_login(self) -> Locator:
-        """Google アカウントでログインしていない場合、手動ログインを待つ。"""
-        if self.page is None:
-            raise RuntimeError("Geminiのページがありません。")
-        input_box = self._find_input()
-        if input_box is not None:
-            return input_box
-        print()
-        print("=" * 55)
-        print("Geminiへのログインが必要です。")
-        print("Edgeの画面でGoogleアカウントに手動ログインしてください。")
-        print("ログイン完了後、この画面でEnterを押してください。")
-        print("=" * 55)
-        input("ログイン完了後、Enterを押してください: ")
-        try:
-            self.page.bring_to_front()
-        except Exception:
-            logger.warning("Edgeの画面を前面に表示できませんでした。")
-        deadline = time.monotonic() + self.max_wait_seconds
-        while time.monotonic() < deadline:
-            input_box = self._find_input()
-            if input_box is not None:
-                logger.info("Geminiへのログインを確認しました。")
-                return input_box
-            time.sleep(self.poll_interval)
-        raise RuntimeError(
-            "ログイン後も入力欄が見つかりません。"
-            "Geminiの画面を確認してください。"
-        )
+        """Geminiのログイン待ちは共通のGUI/CLI対応処理へ委譲する。"""
+        return super()._wait_for_login()

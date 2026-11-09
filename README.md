@@ -1,8 +1,8 @@
 # 春日部つむぎAI
 
-Gemini / ChatGPT WebとVOICEVOXを連携させた音声対話アプリケーションです。使用するLLMは config.yaml の llm_backend で切り替えます。
+Gemini / ChatGPT WebとVOICEVOXを連携させたデスクトップ音声対話アプリケーションです。通常はPySide6 GUIを使用し、config.yaml の gui_enabled を false にすると従来のCLIモードで起動します。使用するLLMは llm_backend で切り替えます。
 
-v0.7.0ではLLMの感情タグに応じた表情、長時間待機時の自然な休憩動作、実行ごとのログファイル出力に対応しました。
+v0.8.0ではPySide6 GUIを追加し、Live2D・会話表示・入力・状態表示を1つのウィンドウに統合しました。v0.7.0の感情表現と自然な休憩動作も維持しています。
 
 ## 必要環境
 
@@ -11,11 +11,13 @@ v0.7.0ではLLMの感情タグに応じた表情、長時間待機時の自然�
 - Microsoft Edge
 - VOICEVOX
 - インターネット接続
+- PySide6（GUIモード。requirements.txtからインストール）
 
 Live2Dを使用する場合は、追加で以下が必要です。
 
 - live2d-py
-- GLFW
+- PySide6（GUI）
+- GLFW（CLIモード）
 - PyOpenGL
 - Live2D Cubism Core DLL
 - 利用許諾を確認したCubism 3以降のモデル
@@ -45,14 +47,12 @@ python -m playwright install msedge
 
 ## 初回ログイン
 
-初回は使用するLLMに手動でログインする必要があります。
+初回は使用するLLMに手動でログインする必要があります。GUIモードではEdgeが起動した後、ログインが必要な場合にアプリ内ダイアログが表示されます。Edgeでログインした後、「ログイン完了」を押してください。CLIモードでは従来どおりコンソールでEnterを押します。
 
 - Gemini: Googleアカウント
 - ChatGPT: ChatGPTアカウント
 
-起動したEdgeの画面からログインしてください。ログイン状態はEdgeプロファイルに保存されます。
-
-use_real_edge_profile が true の場合は、アプリ起動前にEdgeを完全に終了してください。
+ログイン状態はEdgeプロファイルに保存されます。use_real_edge_profile が true の場合は、起動前にEdgeを完全に終了してください。
 
 ## 起動
 
@@ -60,7 +60,15 @@ use_real_edge_profile が true の場合は、アプリ起動前にEdgeを完全
 .\run.bat
 ~~~
 
-終了する場合は exit と入力するか、Ctrl+Cを押してください。
+通常はGUIが起動します。Live2Dアバター、会話履歴、入力欄、送信ボタン、状態表示、終了ボタンが1つのウィンドウに表示されます。入力欄でEnterを押すか「送信」をクリックすると会話できます。LLMの問い合わせと音声合成・再生はバックグラウンドスレッドで実行されます。
+
+CLIモードを使う場合は config.yaml を次のように変更してください。
+
+~~~yaml
+gui_enabled: false
+~~~
+
+終了する場合はGUIの「終了」またはウィンドウ右上の閉じるボタンを押してください。CLIモードでは exit または Ctrl+C を使用します。
 
 ---
 
@@ -68,7 +76,8 @@ use_real_edge_profile が true の場合は、アプリ起動前にEdgeを完全
 
 ## 機能
 
-- Live2Dモデルを独立ウィンドウに表示
+- Live2DモデルをメインGUIウィンドウ内に表示（PySide6 QOpenGLWidget）
+- GUIを無効にした場合は、従来のGLFW別ウィンドウで表示
 - LLMの感情タグ（normal / happy / sad / shocked / shy）に応じた表情
 - VOICEVOXのRMS音量に応じた口パク
 - 自動まばたき
@@ -79,7 +88,7 @@ use_real_edge_profile が true の場合は、アプリ起動前にEdgeを完全
 - 実行ごとのUTF-8ログファイル（logs/）とコンソールへの同時出力
 - Live2Dが利用できない場合はアバターなしで音声対話を継続
 
-描画は専用スレッドで実行し、音声再生側からは口の開き具合のみをスレッドセーフに更新します。
+GUIモードではQOpenGLWidgetのOpenGLコンテキストを使い、Live2Dの初期化・モデル更新・描画をQtの描画ライフサイクル内で行います。LLM問い合わせ・音声合成・再生はワーカースレッドで実行し、UIの操作や状態表示を止めません。CLIモードでは従来の専用描画スレッドを使用します。
 
 ## 1. live2d-pyのインストール
 
@@ -178,6 +187,7 @@ live2d_expressions:
   shy: "照れ"
 log_to_file: true
 log_dir: "logs"
+gui_enabled: true
 ~~~
 
 | 設定 | 説明 | 既定値 |
@@ -193,6 +203,7 @@ log_dir: "logs"
 | live2d_expressions | 感情ごとの表情名。nullはnormal | 下記の例 |
 | log_to_file | 実行ごとのログファイルを出力するか | true |
 | log_dir | ログの保存先（相対パスはプロジェクトルート基準） | logs |
+| gui_enabled | GUIを使用するか。falseなら従来のCLIモード | true |
 
 設定キーがconfig.yamlに存在しない場合は、main.py側の既定値を使用します。
 
@@ -311,6 +322,12 @@ ParamBreath / PARAM_BREATH をsin波でゆっくり変化させます。
 
 ## 12. トラブルシューティング
 
+### GUIが起動しない
+
+- PySide6がインストールされているか確認してください。
+- requirements.txtを使ってセットアップを再実行してください。
+- CLIモードへ切り替える場合は gui_enabled: false を設定してください。
+
 ### Live2Dが表示されない
 
 - live2d-py、glfw、PyOpenGLがインストールされているか確認してください。
@@ -356,6 +373,7 @@ config.yamlの llm_backend を gemini または chatgpt に変更します。
 
 # バージョン履歴
 
+- v0.8.0 — PySide6 GUIを追加し、Live2DをQOpenGLWidgetへ統合。入力・会話履歴・状態表示・終了操作を1つのウィンドウに集約。LLM問い合わせとVOICEVOX音声合成・再生をワーカースレッド化し、GUI上のログイン完了ダイアログ、終了時の協調停止、gui_enabledによるCLIモード切り替えに対応。
 - v0.7.0 — LLMの先頭感情タグを解析して読み上げ文から除去し、Live2D表情APIまたは表情パラメータプリセットで感情表現を追加。20秒以上の無発話時に閉眼・視線移動・小さな首振りを行う自然な休憩状態、Live2D既定有効化、実行ごとのUTF-8ログファイル出力に対応。
 - v0.6.1 — 公式Live2Dモデルの PARAM_ 形式パラメータIDに対応。口・眼・呼吸パラメータを大文字小文字を区別せず自動解決し、live2d_mouth_param による口パラメータの明示指定を追加。待機中の角度・体のゆらゆら揺れと live2d_idle_sway 設定を追加。
 - v0.6.0 — Phase 2。Live2DViewerを追加。別スレッドでのモデル描画、VOICEVOX RMS連携による口パク、自動まばたき、呼吸表現、Idleモーション再生に対応。Live2Dが利用できない場合はアバターなしで継続するフォールバックを追加。
