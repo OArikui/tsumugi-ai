@@ -3,3 +3,8 @@ requests>=2.32.0
 sounddevice>=0.5.0
 numpy>=1.26.0
 PyYAML>=6.0.1
+
+# Live2D
+live2d-py>=1.0.0
+glfw>=2.7.0
+PyOpenGL>=3.1.7
