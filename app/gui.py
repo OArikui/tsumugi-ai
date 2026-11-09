@@ -175,8 +175,8 @@ class ConversationWorker(QThread):
                     if not self._stt_ready or self._stt is None:
                         continue
                     try:
-                        self.recording_changed.emit(False)
                         self.status_changed.emit("文字起こし中...")
+                        self.recording_changed.emit(False)
                         recognized_text = self._stt.stop_recording_and_transcribe()
                         if recognized_text:
                             self.transcript_ready.emit(recognized_text)
@@ -399,6 +399,9 @@ class MainWindow(QMainWindow):
     def _set_status(self, status: str) -> None:
         self._status_text = status
         self.status_label.setText(status)
+        if status == "待機中" and self._ready and not self._turn_pending:
+            self.input_field.setEnabled(True)
+            self.send_button.setEnabled(True)
         self._refresh_microphone_button()
         if status == "考え中":
             self.live2d_widget.set_activity("thinking")
@@ -441,6 +444,9 @@ class MainWindow(QMainWindow):
     @Slot(bool)
     def _on_recording_changed(self, recording: bool) -> None:
         self._recording = recording
+        if recording:
+            self.input_field.setEnabled(False)
+            self.send_button.setEnabled(False)
         self._refresh_microphone_button()
 
     @Slot(str)
