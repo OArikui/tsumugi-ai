@@ -419,6 +419,15 @@ def run_cli(config: dict) -> int:
             if user_text.lower() == "exit":
                 break
 
+            if user_text and stt is not None and stt.is_recording:
+                try:
+                    stt.stop_recording()
+                    logger.info("録音中にテキスト入力されたため、録音を停止しました。")
+                except Exception:
+                    logger.warning("録音停止に失敗しました。音声入力を無効化します。", exc_info=True)
+                    stt.close()
+                    stt = None
+
             if not user_text:
                 if stt is None or not stt.is_ready:
                     continue
