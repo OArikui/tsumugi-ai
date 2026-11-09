@@ -16,7 +16,7 @@ from app.live2d_viewer import Live2DViewer
 from app.tts_voicevox import VoiceVoxTTS
 
 
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.6.1"
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +128,8 @@ def create_live2d_viewer(config: dict) -> Live2DViewer | None:
             width=int(config.get("live2d_width", 480)),
             height=int(config.get("live2d_height", 640)),
             mouth_scale=float(config.get("live2d_mouth_scale", 3.0)),
+            mouth_param=str(config.get("live2d_mouth_param", "")),
+            idle_sway=bool(config.get("live2d_idle_sway", True)),
         )
 
         if viewer.start():
@@ -195,9 +197,9 @@ def main() -> int:
     ui: ConsoleUI | None = None
 
     print()
-    print("=" * 50)
+    print("=" *  50)
     print(f"       春日部つむぎAI v{APP_VERSION}")
-    print("=" * 50)
+    print("=" *  50)
     print()
 
     try:

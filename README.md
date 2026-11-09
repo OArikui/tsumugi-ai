@@ -2,7 +2,7 @@
 
 Gemini / ChatGPT WebとVOICEVOXを連携させた音声対話アプリケーションです。使用するLLMは config.yaml の llm_backend で切り替えます。
 
-v0.6.0ではLive2Dアバター表示とVOICEVOXの再生音量に応じた口パク機能を追加しました。
+v0.6.1では公式Live2DモデルのパラメータIDに対応し、待機中のゆらゆら揺れを追加しました。
 
 ## 必要環境
 
@@ -72,6 +72,7 @@ use_real_edge_profile が true の場合は、アプリ起動前にEdgeを完全
 - VOICEVOXのRMS音量に応じた口パク
 - 自動まばたき
 - sin波による呼吸表現
+- 待機中の角度・体のゆらゆら揺れ
 - モデルにIdleモーションが定義されていれば起動時に再生
 - Live2Dが利用できない場合はアバターなしで音声対話を継続
 
@@ -134,27 +135,24 @@ Cubism Core DLLはライセンス上の理由からリポジトリに含めな�
 
 モデルファイルはリポジトリに含めていません。利用者が利用許諾を確認したモデルを用意してください。
 
-既定のモデル配置先は次のとおりです。
+既定の公式モデル配置先は次のとおりです。
 
 ~~~text
 tsumugi-ai/
 ├── assets/
 │   └── live2d/
 │       └── tsumugi/
-│           ├── model.model3.json
-│           ├── model.moc3
+│           ├── 春日部つむぎ公式live2Dモデル.model3.json
+│           ├── *.moc3
 │           ├── textures/
 │           ├── motions/
-│           ├── expressions/
-│           └── physics/
+│           └── expressions/
 ├── app/
 ├── main.py
 └── config.yaml
 ~~~
 
-これは配置例です。実際にはmodel.model3.json内の相対パス指定に従って、MOC3、テクスチャ、モーション、物理演算などの関連ファイルを配置してください。
-
-モデルデータはリポジトリに追加しないでください。各利用者が自身で用意します。
+これは配置例です。実際にはmodel3.json内の相対パス指定に従って、MOC3、テクスチャ、モーション、物理演算などの関連ファイルを配置してください。
 
 ## 4. config.yamlの設定
 
@@ -162,10 +160,12 @@ Live2Dは既定で無効です。次の設定を変更すると有効になり�
 
 ~~~yaml
 live2d_enabled: true
-live2d_model_path: "./assets/live2d/tsumugi/model.model3.json"
+live2d_model_path: "./assets/live2d/tsumugi/春日部つむぎ公式live2Dモデル.model3.json"
 live2d_width: 480
 live2d_height: 640
 live2d_mouth_scale: 3.0
+live2d_mouth_param: ""
+live2d_idle_sway: true
 ~~~
 
 | 設定 | 説明 | 既定値 |
@@ -175,49 +175,79 @@ live2d_mouth_scale: 3.0
 | live2d_width | ウィンドウ幅 | 480 |
 | live2d_height | ウィンドウ高さ | 640 |
 | live2d_mouth_scale | 口パクの感度 | 3.0 |
+| live2d_mouth_param | 口開閉パラメータID。空文字なら自動判定 | 空文字 |
+| live2d_idle_sway | 待機中のゆらゆら揺れ | true |
 
 設定キーがconfig.yamlに存在しない場合は、main.py側の既定値を使用します。
 
-## 5. 口パク
+## 5. パラメータIDの自動判定
+
+モデルごとにCubismパラメータIDの表記が異なるため、起動時に model.GetParamIds() から実際のIDを取得し、候補名を大文字小文字を区別せず照合します。
+
+口・眼・呼吸は次の候補に対応しています。
+
+| 用途 | 標準形式 | 公式モデル形式 |
+|---|---|---|
+| 口の開閉 | ParamMouthOpenY | PARAM_MOUTH_OPEN_Y |
+| 左眼の開閉 | ParamEyeLOpen | PARAM_EYE_L_OPEN |
+| 右眼の開閉 | ParamEyeROpen | PARAM_EYE_R_OPEN |
+| 呼吸 | ParamBreath | PARAM_BREATH |
+
+解決した実際のパラメータIDは起動時にINFOログへ出力されます。
+
+口のパラメータを明示したい場合は、live2d_mouth_param にモデルのIDを指定してください。例:
+
+~~~yaml
+live2d_mouth_param: "PARAM_MOUTH_OPEN_Y"
+~~~
+
+空文字の場合は自動判定します。指定したIDが見つからなければ標準候補による自動判定へフォールバックします。
+
+口のIDが解決できない場合は警告を出して口パクだけを省略します。眼や呼吸のパラメータがない場合も、その演出だけを省略して表示を継続します。
+
+## 6. 待機中のゆらゆら揺れ
+
+live2d_idle_sway: true の場合、描画フレームごとに角度・体のパラメータへ小さなsin波を加算します。
+
+| パラメータ | 振幅 | 周期 |
+|---|---:|---:|
+| 角度X | ±3.0 | 約6.3秒 |
+| 角度Y | ±2.0 | 約7.9秒 |
+| 角度Z | ±1.5 | 約9.1秒 |
+| 体の回転X | ±1.5 | 約6.3秒 |
+| 体の回転Z | ±1.0 | 約10.3秒 |
+
+存在するパラメータだけに適用します。AddParamByIdで加算するため、Idleモーションなどの基礎動作に小さな揺れを重ねます。
+
+無効にする場合:
+
+~~~yaml
+live2d_idle_sway: false
+~~~
+
+## 7. 口パク
 
 VOICEVOXの再生コールバックから音声チャンクごとのRMSを受け取ります。
 
 RMSに live2d_mouth_scale を掛け、0.0〜1.0に制限した値をLive2Dに渡します。
 
-Live2D側では描画スレッドが次のパラメータを更新します。
+音声再生終了後は、口の開き具合を0.0に戻します。
 
-~~~text
-ParamMouthOpenY
-~~~
-
-音声再生が終了したときは、口の開き具合を0.0に戻します。Live2Dが無効、または起動に失敗した場合はRMSコールバックから口パク処理を行いません。
-
-## 6. 待機中の演出
+## 8. 待機中の演出
 
 ### まばたき
 
-次のパラメータを数秒間隔で短時間閉じるように更新します。
-
-~~~text
-ParamEyeLOpen
-ParamEyeROpen
-~~~
+ParamEyeLOpen / PARAM_EYE_L_OPEN と ParamEyeROpen / PARAM_EYE_R_OPEN を数秒間隔で短時間閉じるように更新します。
 
 ### 呼吸
 
-sin波を使い、次のパラメータをゆっくり変化させます。
-
-~~~text
-ParamBreath
-~~~
-
-各パラメータがモデルに存在する場合だけ更新します。
+ParamBreath / PARAM_BREATH をsin波でゆっくり変化させます。
 
 ### Idleモーション
 
-モデルJSONの FileReferences.Motions.Idle を確認し、Idleグループが定義されていれば最初のモーションを起動時に再生します。Idleがないモデルでは省略します。
+モデルJSONの FileReferences.Motions.Idle を確認し、Idleグループが定義されていれば最初のモーションを起動時に再生します。
 
-## 7. トラブルシューティング
+## 9. トラブルシューティング
 
 ### Live2Dが表示されない
 
@@ -228,6 +258,12 @@ ParamBreath
 - OpenGLを利用できる環境か確認してください。
 
 Live2Dの初期化に失敗しても、VOICEVOXとLLMによる音声対話は継続します。
+
+### 口パクやまばたきが動かない
+
+- 起動ログで実際に解決されたパラメータIDを確認してください。
+- 公式モデルでは PARAM_MOUTH_OPEN_Y、PARAM_EYE_L_OPEN、PARAM_EYE_R_OPEN などの大文字形式が使われる場合があります。
+- 口のIDは live2d_mouth_param で明示指定できます。
 
 ### VOICEVOXに接続できない
 
@@ -258,6 +294,7 @@ config.yamlの llm_backend を gemini または chatgpt に変更します。
 
 # バージョン履歴
 
+- v0.6.1 — 公式Live2Dモデルの PARAM_ 形式パラメータIDに対応。口・眼・呼吸パラメータを大文字小文字を区別せず自動解決し、live2d_mouth_param による口パラメータの明示指定を追加。待機中の角度・体のゆらゆら揺れと live2d_idle_sway 設定を追加。
 - v0.6.0 — Phase 2。Live2DViewerを追加。別スレッドでのモデル描画、VOICEVOX RMS連携による口パク、自動まばたき、呼吸表現、Idleモーション再生に対応。Live2Dが利用できない場合はアバターなしで継続するフォールバックを追加。
 - v0.5.1 — 処理が完了したときにバーを全部塗りつぶした状態で1行残すよう変更。例外時は完了表示を出さずに行を消す。
 - v0.5.0 — 状態表示をバー表示に変更。処理中は流れるバー、再生中は再生進捗バーと音量メーターをコンソールの1行に表示。

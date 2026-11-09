@@ -31,7 +31,7 @@ system_prompt: |
 # falseの場合、Live2Dを使用せず従来の音声対話のみで動作します。
 live2d_enabled: false
 
-# Cubism 3以降のモデルJSON
+# 公式モデルのCubism 3以降のモデルJSON
 live2d_model_path: "./assets/live2d/tsumugi/春日部つむぎ公式live2Dモデル.model3.json"
 
 # Live2Dウィンドウサイズ
@@ -40,3 +40,10 @@ live2d_height: 640
 
 # 口パク感度（RMS × mouth_scale）
 live2d_mouth_scale: 3.0
+
+# 口の開閉パラメータID。空文字ならモデルから自動判定する。
+# 公式モデル例: PARAM_MOUTH_OPEN_Y
+live2d_mouth_param: ""
+
+# 待機中の角度・体のゆらゆら揺れ
+live2d_idle_sway: true

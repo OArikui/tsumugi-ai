@@ -27,18 +27,47 @@ class Live2DViewer:
     SHUTDOWN_TIMEOUT = 15.0
     BLINK_DURATION = 0.24
 
+    PARAMETER_CANDIDATES = {
+        "mouth": ("ParamMouthOpenY", "PARAM_MOUTH_OPEN_Y"),
+        "left_eye": ("ParamEyeLOpen", "PARAM_EYE_L_OPEN"),
+        "right_eye": ("ParamEyeROpen", "PARAM_EYE_R_OPEN"),
+        "breath": ("ParamBreath", "PARAM_BREATH"),
+    }
+
+    SWAY_PARAMETERS = {
+        "angle_x": (("ParamAngleX", "PARAM_ANGLE_X"), 3.0, 6.3, 0.0),
+        "angle_y": (("ParamAngleY", "PARAM_ANGLE_Y"), 2.0, 7.9, 0.8),
+        "angle_z": (("ParamAngleZ", "PARAM_ANGLE_Z"), 1.5, 9.1, 1.7),
+        "body_angle_x": (
+            ("ParamBodyAngleX", "PARAM_BODY_ANGLE_X"),
+            1.5,
+            6.3,
+            1.1,
+        ),
+        "body_angle_z": (
+            ("ParamBodyAngleZ", "PARAM_BODY_ANGLE_Z"),
+            1.0,
+            10.3,
+            2.8,
+        ),
+    }
+
     def __init__(
         self,
         model_path: str,
         width: int = 480,
         height: int = 640,
         mouth_scale: float = 3.0,
+        mouth_param: str = "",
+        idle_sway: bool = True,
     ) -> None:
-        """モデルパス、ウィンドウサイズ、口パク倍率を設定する。"""
+        """モデル、ウィンドウ、口パク、待機中の揺れを設定する。"""
         self.model_path = Path(model_path).expanduser().resolve()
         self.width = max(1, int(width))
         self.height = max(1, int(height))
         self.mouth_scale = max(0.0, float(mouth_scale))
+        self.mouth_param = str(mouth_param or "").strip()
+        self.idle_sway = bool(idle_sway)
 
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
@@ -216,6 +245,108 @@ class Live2DViewer:
         )
         return True
 
+    @staticmethod
+    def _resolve_parameter_id(
+        parameter_ids: set[str],
+        candidates: tuple[str, ...],
+    ) -> str | None:
+        """候補IDを大文字小文字を区別せず照合し、実際のIDを返す。"""
+        available = {
+            parameter_id.casefold(): parameter_id
+            for parameter_id in parameter_ids
+            if isinstance(parameter_id, str)
+        }
+
+        for candidate in candidates:
+            resolved = available.get(candidate.casefold())
+            if resolved is not None:
+                return resolved
+
+        return None
+
+    def _resolve_model_parameters(
+        self,
+        parameter_ids: set[str],
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """口・眼・呼吸・揺れに使う実パラメータIDを解決する。"""
+        resolved: dict[str, str] = {}
+
+        for role, candidates in self.PARAMETER_CANDIDATES.items():
+            preferred_candidates = candidates
+
+            if role == "mouth" and self.mouth_param:
+                preferred_candidates = (
+                    self.mouth_param,
+                    *candidates,
+                )
+
+            parameter_id = self._resolve_parameter_id(
+                parameter_ids,
+                preferred_candidates,
+            )
+
+            if (
+                role == "mouth"
+                and self.mouth_param
+                and parameter_id is None
+            ):
+                logger.warning(
+                    "指定された口パラメータID %r がモデルにありません。"
+                    "標準候補から自動判定します。",
+                    self.mouth_param,
+                )
+                parameter_id = self._resolve_parameter_id(
+                    parameter_ids,
+                    candidates,
+                )
+
+            if parameter_id is not None:
+                resolved[role] = parameter_id
+                logger.info(
+                    "Live2Dパラメータを解決しました: %s = %s",
+                    role,
+                    parameter_id,
+                )
+            elif role == "mouth":
+                logger.warning(
+                    "口の開閉パラメータが見つかりません。"
+                    "live2d_mouth_paramを確認してください。口パクを無効にします。"
+                )
+            else:
+                logger.info(
+                    "Live2Dの%sパラメータは見つかりません。該当演出を省略します。",
+                    role,
+                )
+
+        resolved_sway: dict[str, str] = {}
+
+        if self.idle_sway:
+            for role, (candidates, amplitude, period, phase) in self.SWAY_PARAMETERS.items():
+                parameter_id = self._resolve_parameter_id(
+                    parameter_ids,
+                    candidates,
+                )
+
+                if parameter_id is not None:
+                    resolved_sway[role] = parameter_id
+                    logger.info(
+                        "Live2D待機揺れパラメータを解決しました: %s = %s "
+                        "(振幅=%.1f, 周期=%.1f秒)",
+                        role,
+                        parameter_id,
+                        amplitude,
+                        period,
+                    )
+                else:
+                    logger.debug(
+                        "待機揺れパラメータ %s はモデルにありません。",
+                        role,
+                    )
+        else:
+            logger.info("Live2Dの待機中の揺れは無効です。")
+
+        return resolved, resolved_sway
+
     def start(self) -> bool:
         """Live2Dウィンドウと描画スレッドを開始する。"""
         with self._state_lock:
@@ -318,7 +449,6 @@ class Live2DViewer:
         startup_reported = False
 
         try:
-            # Core DLLを読み込んだ後にネイティブ拡張をimportする。
             import glfw as glfw_module
             import live2d as live2d_module
             from OpenGL import GL
@@ -371,10 +501,9 @@ class Live2DViewer:
             model.SetAutoBreath(False)
 
             parameter_ids = set(model.GetParamIds())
-            if "ParamMouthOpenY" not in parameter_ids:
-                logger.warning(
-                    "モデルにParamMouthOpenYがありません。口パクは動作しません。"
-                )
+            resolved_parameters, resolved_sway = (
+                self._resolve_model_parameters(parameter_ids)
+            )
 
             def on_framebuffer_resize(
                 resized_window: Any,
@@ -440,13 +569,14 @@ class Live2DViewer:
 
                 model.Update(delta_time)
 
-                if "ParamMouthOpenY" in parameter_ids:
+                mouth_id = resolved_parameters.get("mouth")
+                if mouth_id is not None:
                     model.SetParamById(
-                        "ParamMouthOpenY",
+                        mouth_id,
                         self._get_mouth_open(),
                     )
 
-                # 数秒ごとに短いまばたきを行う。
+                # まばたき
                 if blink_start_time is None and now >= next_blink_time:
                     blink_start_time = now
 
@@ -466,12 +596,17 @@ class Live2DViewer:
 
                     blink_open = max(0.0, min(1.0, blink_open))
 
-                if "ParamEyeLOpen" in parameter_ids:
-                    model.SetParamById("ParamEyeLOpen", blink_open)
-                if "ParamEyeROpen" in parameter_ids:
-                    model.SetParamById("ParamEyeROpen", blink_open)
+                left_eye_id = resolved_parameters.get("left_eye")
+                if left_eye_id is not None:
+                    model.SetParamById(left_eye_id, blink_open)
 
-                if "ParamBreath" in parameter_ids:
+                right_eye_id = resolved_parameters.get("right_eye")
+                if right_eye_id is not None:
+                    model.SetParamById(right_eye_id, blink_open)
+
+                # 呼吸
+                breath_id = resolved_parameters.get("breath")
+                if breath_id is not None:
                     elapsed = now - initial_time
                     breath_value = (
                         0.5
@@ -479,7 +614,18 @@ class Live2DViewer:
                             elapsed * 2.0 * math.pi / 4.5
                         )
                     )
-                    model.SetParamById("ParamBreath", breath_value)
+                    model.SetParamById(breath_id, breath_value)
+
+                # AddParamByIdでIdleモーションに小さな揺れを重ねる。
+                if self.idle_sway and resolved_sway:
+                    elapsed = now - initial_time
+
+                    for role, parameter_id in resolved_sway.items():
+                        _, amplitude, period, phase = self.SWAY_PARAMETERS[role]
+                        sway_value = amplitude * math.sin(
+                            elapsed * 2.0 * math.pi / period + phase
+                        )
+                        model.AddParamById(parameter_id, sway_value)
 
                 live2d.clearBuffer(0.96, 0.96, 0.98, 1.0)
                 model.Draw()
@@ -515,32 +661,47 @@ class Live2DViewer:
                 try:
                     glfw.make_context_current(window)
                 except Exception:
-                    logger.debug("OpenGLコンテキストの再設定に失敗しました。", exc_info=True)
+                    logger.debug(
+                        "OpenGLコンテキストの再設定に失敗しました。",
+                        exc_info=True,
+                    )
 
             if model is not None and renderer_created:
                 try:
                     model.DestroyRenderer()
                 except Exception:
-                    logger.debug("Live2D Rendererの解放に失敗しました。", exc_info=True)
+                    logger.debug(
+                        "Live2D Rendererの解放に失敗しました。",
+                        exc_info=True,
+                    )
 
             if live2d is not None and live2d_initialized:
                 try:
                     live2d.dispose()
                 except Exception:
-                    logger.debug("Live2Dの解放に失敗しました。", exc_info=True)
+                    logger.debug(
+                        "Live2Dの解放に失敗しました。",
+                        exc_info=True,
+                    )
 
             if glfw is not None:
                 if window:
                     try:
                         glfw.destroy_window(window)
                     except Exception:
-                        logger.debug("Live2Dウィンドウの解放に失敗しました。", exc_info=True)
+                        logger.debug(
+                            "Live2Dウィンドウの解放に失敗しました。",
+                            exc_info=True,
+                        )
 
                 if glfw_initialized:
                     try:
                         glfw.terminate()
                     except Exception:
-                        logger.debug("GLFWの終了に失敗しました。", exc_info=True)
+                        logger.debug(
+                            "GLFWの終了に失敗しました。",
+                            exc_info=True,
+                        )
 
             self._release_dll_resources()
             logger.info("Live2D描画スレッドを終了しました。")
