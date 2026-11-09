@@ -26,10 +26,12 @@ system_prompt: |
   箇条書き、見出し、Markdown、表記記号は避けてください。
   URLやプログラムコードなど、読み上げに適さない表現はできるだけ避けてください。
   必要以上に長い説明はしないでください。
+  返答の先頭に最も合う感情タグを1つ付けてください。感情タグは [emotion:normal]、[emotion:happy]、[emotion:sad]、[emotion:shocked]、[emotion:shy] のいずれかです。
+  本文は従来通り短い口語で、タグ以外にMarkdown等は使わないでください。
 
 # Live2D
 # falseの場合、Live2Dを使用せず従来の音声対話のみで動作します。
-live2d_enabled: false
+live2d_enabled: true
 
 # 公式モデルのCubism 3以降のモデルJSON
 live2d_model_path: "./assets/live2d/tsumugi/春日部つむぎ公式live2Dモデル.model3.json"
@@ -47,3 +49,18 @@ live2d_mouth_param: ""
 
 # 待機中の角度・体のゆらゆら揺れ
 live2d_idle_sway: true
+
+# 20秒以上口が動いていないときの自然な休憩状態
+live2d_natural_idle: true
+
+# 感情ごとの表情名。nullは通常表情へ戻す。
+live2d_expressions:
+  normal: null
+  happy: "きらーん"
+  sad: "うるうる"
+  shocked: "がーん"
+  shy: "照れ"
+
+# 実行ごとのログファイル出力
+log_to_file: true
+log_dir: "logs"
