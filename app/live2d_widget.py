@@ -154,12 +154,12 @@ class Live2DWidget(QOpenGLWidget):
                 str(self._controller.model_path),
                 create_renderer=False,
             )
+            self._model = model
             model.CreateRenderer()
             self._renderer_created = True
             model.Resize(max(1, self.width()), max(1, self.height()))
             model.SetAutoBlink(False)
             model.SetAutoBreath(False)
-            self._model = model
 
             parameter_ids = set(model.GetParamIds())
             (
