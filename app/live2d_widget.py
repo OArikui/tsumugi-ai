@@ -96,17 +96,14 @@ class Live2DWidget(QOpenGLWidget):
     def set_mouth_open(self, value: float) -> None:
         """口パク値をスレッドセーフに更新する。"""
         self._controller.set_mouth_open(value)
-        self.update()
 
     def set_emotion(self, emotion: str) -> None:
         """感情をスレッドセーフに受け取り、次の描画フレームで反映する。"""
         self._controller.set_emotion(emotion)
-        self.update()
 
     def set_expression(self, name: str | None) -> None:
         """表情名をスレッドセーフに受け取り、次の描画フレームで反映する。"""
         self._controller.set_expression(name)
-        self.update()
 
     def set_activity(self, activity: str) -> None:
         """GUI状態に応じた簡単なアバター動作を設定する。"""
