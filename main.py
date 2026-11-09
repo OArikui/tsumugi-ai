@@ -72,6 +72,7 @@ def create_tts(config: dict) -> VoiceVoxTTS:
         voicevox_url=config["voicevox_url"],
         speaker=int(config["speaker"]),
         rms_callback=_log_rms_callback,
+        split_by_sentence=bool(config.get("tts_split_by_sentence", False)),
     )
 
 
@@ -89,12 +90,13 @@ def main() -> int:
         tts.check_connection()
         logger.info("LLMを初期化しています。")
         llm = create_llm(config)
-        logger.info("ChatGPTを起動しています。")
+        logger.info("AIを起動しています。")
+        print("[処理中] AIを起動しています…")
         llm.start()
         print("準備ができました。")
-        print("文章を入力してください。")
         print("終了する場合は exit と入力してください。")
         while True:
+            print("[待機中] 文章を入力してください。")
             try:
                 user_text = input("あなた: ").strip()
             except EOFError:
@@ -104,6 +106,7 @@ def main() -> int:
             if not user_text:
                 continue
             try:
+                print("[処理中] AIの返答を待っています…")
                 logger.info("LLMに問い合わせています。")
                 response = llm.chat(user_text)
                 if not response.strip():
@@ -112,6 +115,7 @@ def main() -> int:
                 print()
                 print(f"春日部つむぎ: {response}")
                 print()
+                print("[処理中] 音声を合成して再生しています…")
                 tts.speak(response)
             except KeyboardInterrupt:
                 logger.info("処理を中断しました。")

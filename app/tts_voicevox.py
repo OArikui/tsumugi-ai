@@ -24,12 +24,14 @@ class VoiceVoxTTS:
         timeout: float = 30.0,
         volume: float = 1.0,
         rms_callback: RMSCallback | None = None,
+        split_by_sentence: bool = False,
     ) -> None:
         self.voicevox_url = voicevox_url.rstrip("/")
         self.speaker = speaker
         self.timeout = timeout
         self.volume = max(0.0, min(float(volume), 2.0))
         self.rms_callback = rms_callback
+        self.split_by_sentence = split_by_sentence
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "KasukabeTsumugiAI/1.0"})
 
@@ -42,13 +44,13 @@ class VoiceVoxTTS:
         sentences = re.split(r"(?<=[。！？!?])\s*", cleaned)
         return [sentence.strip() for sentence in sentences if sentence.strip()]
 
-    def _create_audio_query(self, sentence: str) -> dict[str, Any]:
+    def _create_audio_query(self, sentence: str, timeout: float | None = None) -> dict[str, Any]:
         """文章から音声合成用クエリを生成する。"""
         try:
             response = self.session.post(
                 f"{self.voicevox_url}/audio_query",
                 params={"text": sentence, "speaker": self.speaker},
-                timeout=self.timeout,
+                timeout=timeout if timeout is not None else self.timeout,
             )
             response.raise_for_status()
         except requests.RequestException as exc:
@@ -58,14 +60,14 @@ class VoiceVoxTTS:
         except ValueError as exc:
             raise RuntimeError("VOICEVOXの応答をJSONとして読み取れませんでした。") from exc
 
-    def _synthesize(self, audio_query: dict[str, Any]) -> bytes:
+    def _synthesize(self, audio_query: dict[str, Any], timeout: float | None = None) -> bytes:
         """音声合成クエリからWAV音声を生成する。"""
         try:
             response = self.session.post(
                 f"{self.voicevox_url}/synthesis",
                 params={"speaker": self.speaker},
                 json=audio_query,
-                timeout=self.timeout,
+                timeout=timeout if timeout is not None else self.timeout,
             )
             response.raise_for_status()
             return response.content
@@ -161,19 +163,38 @@ class VoiceVoxTTS:
             raise RuntimeError("音声を再生できません。Windowsの出力デバイスやサウンド設定を確認してください。") from exc
 
     def speak(self, text: str) -> None:
-        """テキストを文単位で合成・再生する。"""
-        sentences = self.split_sentences(text)
-        if not sentences:
+        """テキストを合成・再生する。
+
+        既定では全文を一括で合成してから再生する（文ごとに分けると
+        合成待ちの間が空いてしまうため）。
+        split_by_sentence が True の場合は従来通り文単位で処理する。
+        """
+        if self.split_by_sentence:
+            sentences = self.split_sentences(text)
+            if not sentences:
+                logger.warning("読み上げる文章がありません。")
+                return
+            total = len(sentences)
+            for index, sentence in enumerate(sentences, start=1):
+                logger.info("音声合成中 (%d/%d): %s", index, total, sentence)
+                query = self._create_audio_query(sentence)
+                wav_data = self._synthesize(query)
+                logger.info("音声を再生します。")
+                self._play_audio(wav_data)
+                logger.info("音声再生が完了しました。")
+            return
+        cleaned = re.sub(r"\s+", " ", text).strip()
+        if not cleaned:
             logger.warning("読み上げる文章がありません。")
             return
-        total = len(sentences)
-        for index, sentence in enumerate(sentences, start=1):
-            logger.info("音声合成中 (%d/%d): %s", index, total, sentence)
-            query = self._create_audio_query(sentence)
-            wav_data = self._synthesize(query)
-            logger.info("音声を再生します。")
-            self._play_audio(wav_data)
-            logger.info("音声再生が完了しました。")
+        # 長文の一括合成は時間がかかるため、タイムアウトを長めにする
+        long_timeout = max(self.timeout, 120.0)
+        logger.info("音声を一括合成しています: %s", cleaned)
+        query = self._create_audio_query(cleaned, timeout=long_timeout)
+        wav_data = self._synthesize(query, timeout=long_timeout)
+        logger.info("音声を再生します。")
+        self._play_audio(wav_data)
+        logger.info("音声再生が完了しました。")
 
     def close(self) -> None:
         self.session.close()
