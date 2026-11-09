@@ -56,6 +56,7 @@ class Live2DWidget(QOpenGLWidget):
         self._renderer_created = False
         self._model_ready = False
         self._shutdown = False
+        self._drawing_started = False
         self._fallback_message = (
             "Live2Dは設定で無効です。"
             if not self._enabled
@@ -226,6 +227,10 @@ class Live2DWidget(QOpenGLWidget):
         if not self._model_ready or self._model is None or self._live2d is None:
             self._draw_placeholder()
             return
+
+        if not self._drawing_started:
+            self._controller.reset_mouth_activity()
+            self._drawing_started = True
 
         try:
             now = time.monotonic()

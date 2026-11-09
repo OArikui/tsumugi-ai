@@ -575,6 +575,11 @@ class Live2DViewer:
 
         return self.is_running
 
+    def reset_mouth_activity(self) -> None:
+        """描画開始時点を口の最終活動時刻として記録する。"""
+        with self._mouth_lock:
+            self._last_mouth_activity = time.monotonic()
+
     def set_mouth_open(self, value: float) -> None:
         """口の開き具合を0.0〜1.0に制限してスレッドセーフに保持する。"""
         try:
@@ -749,6 +754,7 @@ class Live2DViewer:
 
             initial_time = time.monotonic()
             last_frame_time = initial_time
+            self.reset_mouth_activity()
             next_blink_time = initial_time + random.uniform(3.0, 5.0)
             blink_start_time: float | None = None
 

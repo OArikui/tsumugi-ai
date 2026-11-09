@@ -19,7 +19,7 @@ from app.stt_whisper import SpeechToText
 from app.tts_voicevox import VoiceVoxTTS
 
 
-APP_VERSION = "0.9.0"
+APP_VERSION = "0.9.1"
 
 logger = logging.getLogger(__name__)
 

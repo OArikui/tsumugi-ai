@@ -124,7 +124,7 @@ class ChatGPTPlaywright(LLMBackend):
         endpoint = f"http://127.0.0.1:{self.cdp_port}"
         # 既に同じポートでEdgeが起動していなければ、通常プロセスとして起動する
         try:
-            self.browser = self.playwright.chromium.connect_over_cdp(endpoint, timeout=3_000)
+            self.browser = self.playwright.chromium.connect_over_cdp(endpoint, timeout=30_000)
         except Exception:
             self.browser = None
         if self.browser is None:
@@ -145,7 +145,7 @@ class ChatGPTPlaywright(LLMBackend):
             while time.monotonic() < deadline:
                 try:
                     self.browser = self.playwright.chromium.connect_over_cdp(
-                        endpoint, timeout=3_000
+                        endpoint, timeout=30_000
                     )
                     break
                 except Exception as exc:  # Edgeの起動待ちでリトライする

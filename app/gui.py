@@ -74,6 +74,7 @@ class ConversationWorker(QThread):
     stt_ready = Signal(bool, str)
     recording_changed = Signal(bool)
     transcript_ready = Signal(str)
+    voicevox_connection_changed = Signal(bool, str)
 
     def __init__(
         self,
@@ -91,6 +92,7 @@ class ConversationWorker(QThread):
         self._viewer = viewer
         self._stt = stt
         self._stt_ready = False
+        self._voicevox_connected = False
         self._parse_response = parse_response
         self._stop_event = stop_event
         self._queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
@@ -103,6 +105,10 @@ class ConversationWorker(QThread):
 
     def stop_recording(self) -> None:
         self._queue.put(("record_stop", None))
+
+    def reconnect_voicevox(self) -> None:
+        """VOICEVOXへの再接続をワーカースレッドへ依頼する。"""
+        self._queue.put(("reconnect_voicevox", None))
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -128,7 +134,18 @@ class ConversationWorker(QThread):
         """初期化後、要求を1件ずつ順番に処理する。"""
         try:
             self.status_changed.emit("VOICEVOXに接続しています")
-            self._tts.check_connection()
+            try:
+                self._tts.check_connection()
+                self._voicevox_connected = True
+                self.voicevox_connection_changed.emit(True, "")
+            except Exception as exc:
+                self._voicevox_connected = False
+                message = (
+                    "VOICEVOXに接続できません。起動してから"
+                    "「VOICEVOX再接続」を押してください。"
+                )
+                logger.warning("%s 詳細: %s", message, exc)
+                self.voicevox_connection_changed.emit(False, message)
             if self._stop_event.is_set():
                 return
 
@@ -158,6 +175,24 @@ class ConversationWorker(QThread):
 
                 if task == "stop" or self._stop_event.is_set():
                     break
+
+                if task == "reconnect_voicevox":
+                    self.status_changed.emit("VOICEVOXに再接続しています")
+                    try:
+                        self._tts.check_connection()
+                        self._voicevox_connected = True
+                        self.voicevox_connection_changed.emit(True, "")
+                    except Exception as exc:
+                        self._voicevox_connected = False
+                        message = (
+                            "VOICEVOXに接続できません。起動してから"
+                            "「VOICEVOX再接続」を押してください。"
+                        )
+                        logger.warning("%s 詳細: %s", message, exc)
+                        self.voicevox_connection_changed.emit(False, message)
+                    if not self._stop_event.is_set():
+                        self.status_changed.emit("待機中")
+                    continue
 
                 if task == "record_start":
                     if not self._stt_ready or self._stt is None:
@@ -206,8 +241,26 @@ class ConversationWorker(QThread):
 
                     self._viewer.set_emotion(emotion)
                     self.assistant_message.emit(spoken_text)
-                    self.status_changed.emit("声を生成中")
-                    self._tts.speak(spoken_text)
+                    if self._voicevox_connected:
+                        self.status_changed.emit("声を生成中")
+                        try:
+                            self._tts.speak(spoken_text)
+                        except Exception as exc:
+                            self._voicevox_connected = False
+                            message = (
+                                "VOICEVOXに接続できません。起動してから"
+                                "「VOICEVOX再接続」を押してください。"
+                            )
+                            logger.warning(
+                                "VOICEVOXの音声合成・再生に失敗しました: %s",
+                                exc,
+                                exc_info=True,
+                            )
+                            self.voicevox_connection_changed.emit(False, message)
+                    else:
+                        logger.info(
+                            "VOICEVOX未接続のため、音声読み上げをスキップしました。"
+                        )
                 except Exception as exc:
                     if not self._stop_event.is_set():
                         logger.exception("GUIの会話処理に失敗しました。")
@@ -267,6 +320,8 @@ class MainWindow(QMainWindow):
         self._close_requested = False
         self._close_ready = False
         self._ready = False
+        self._voicevox_connected = False
+        self._voicevox_connecting = False
         self._stt_available = False
         self._recording = False
         self._stt_auto_send = bool(config.get("stt_auto_send", True))
@@ -283,6 +338,19 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
         header.addWidget(title)
         header.addStretch(1)
+        self.voicevox_status_label = QLabel("VOICEVOX: 接続確認中")
+        self.voicevox_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.voicevox_status_label.setStyleSheet(
+            "padding: 7px 10px; border-radius: 8px; "
+            "background: #263445; color: #E8EEF7; font-weight: 600;"
+        )
+        header.addWidget(self.voicevox_status_label)
+        self.voicevox_reconnect_button = QPushButton("VOICEVOX再接続")
+        self.voicevox_reconnect_button.setEnabled(False)
+        self.voicevox_reconnect_button.clicked.connect(
+            lambda _checked=False: self._reconnect_voicevox()
+        )
+        header.addWidget(self.voicevox_reconnect_button)
         self.status_label = QLabel("起動しています...")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.status_label.setStyleSheet(
@@ -392,6 +460,9 @@ class MainWindow(QMainWindow):
         self._worker.stt_ready.connect(self._on_stt_ready)
         self._worker.recording_changed.connect(self._on_recording_changed)
         self._worker.transcript_ready.connect(self._on_transcript_ready)
+        self._worker.voicevox_connection_changed.connect(
+            self._on_voicevox_connection_changed
+        )
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
 
@@ -399,6 +470,7 @@ class MainWindow(QMainWindow):
     def _set_status(self, status: str) -> None:
         self._status_text = status
         self.status_label.setText(status)
+        self._refresh_voicevox_reconnect_button()
         if status == "待機中" and self._ready and not self._turn_pending:
             self.input_field.setEnabled(True)
             self.send_button.setEnabled(True)
@@ -413,6 +485,48 @@ class MainWindow(QMainWindow):
     def _on_playback_progress(self, progress: float, rms: float) -> None:
         if progress < 1.0:
             self._worker.status_changed.emit("再生中")
+
+    def _refresh_voicevox_reconnect_button(self) -> None:
+        if self._voicevox_connecting:
+            self.voicevox_reconnect_button.setText("接続中...")
+        elif self._voicevox_connected:
+            self.voicevox_reconnect_button.setText("接続済み")
+        else:
+            self.voicevox_reconnect_button.setText("VOICEVOX再接続")
+        self.voicevox_reconnect_button.setEnabled(
+            self._ready
+            and not self._voicevox_connected
+            and not self._voicevox_connecting
+            and not self._turn_pending
+            and not self._close_requested
+        )
+
+    @Slot(bool, str)
+    def _on_voicevox_connection_changed(self, connected: bool, detail: str) -> None:
+        self._voicevox_connected = connected
+        self._voicevox_connecting = False
+        if connected:
+            self.voicevox_status_label.setText("VOICEVOX: 接続済み")
+            self.voicevox_status_label.setToolTip("VOICEVOXに接続しています。")
+        else:
+            self.voicevox_status_label.setText("VOICEVOX: 未接続")
+            self.voicevox_status_label.setToolTip(
+                detail or "VOICEVOXに接続できません。起動してから再接続してください。"
+            )
+        self._refresh_voicevox_reconnect_button()
+
+    def _reconnect_voicevox(self) -> None:
+        if (
+            not self._ready
+            or not self._worker.isRunning()
+            or self._voicevox_connected
+            or self._voicevox_connecting
+        ):
+            return
+        self._voicevox_connecting = True
+        self.voicevox_status_label.setText("VOICEVOX: 再接続中")
+        self._refresh_voicevox_reconnect_button()
+        self._worker.reconnect_voicevox()
 
     def _refresh_microphone_button(self) -> None:
         can_start = (
@@ -466,6 +580,7 @@ class MainWindow(QMainWindow):
         self.input_field.setEnabled(True)
         self.send_button.setEnabled(True)
         self._refresh_microphone_button()
+        self._refresh_voicevox_reconnect_button()
         self.input_field.setFocus()
         self.history.append(
             '<p style="color:#8FA5BD;">準備ができました。会話を始められます。</p>'
@@ -511,6 +626,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_turn_finished(self) -> None:
         self._turn_pending = False
+        self._refresh_voicevox_reconnect_button()
         if self._ready and not self._close_requested:
             self.input_field.setEnabled(True)
             self.send_button.setEnabled(True)
@@ -587,6 +703,7 @@ class MainWindow(QMainWindow):
         self.input_field.setEnabled(False)
         self.send_button.setEnabled(False)
         self.mic_button.setEnabled(False)
+        self._refresh_voicevox_reconnect_button()
         if self._close_requested:
             self._close_ready = True
             QTimer.singleShot(0, self.close)
@@ -601,6 +718,7 @@ class MainWindow(QMainWindow):
 
         if self._worker.isRunning():
             self._close_requested = True
+            self._refresh_voicevox_reconnect_button()
             self.status_label.setText("終了処理中...")
             self.input_field.setEnabled(False)
             self.send_button.setEnabled(False)
