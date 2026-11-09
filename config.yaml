@@ -32,7 +32,7 @@ system_prompt: |
 live2d_enabled: false
 
 # Cubism 3以降のモデルJSON
-live2d_model_path: "./assets/live2d/tsumugi/model.model3.json"
+live2d_model_path: "./assets/live2d/tsumugi/春日部つむぎ公式live2Dモデル.model3.json"
 
 # Live2Dウィンドウサイズ
 live2d_width: 480
