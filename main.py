@@ -2,8 +2,10 @@
 
 import logging
 import os
+import re
 import sys
 
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -16,7 +18,7 @@ from app.live2d_viewer import Live2DViewer
 from app.tts_voicevox import VoiceVoxTTS
 
 
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.7.0"
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +26,50 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 
-def setup_logging() -> None:
-    """ログ出力を設定する。"""
+def setup_logging(config: dict | None = None) -> None:
+    """コンソールと、必要に応じて実行ごとのUTF-8ログファイルへ出力する。"""
+    log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(logging.Formatter(log_format))
+    handlers = [console_handler]
+    log_path: Path | None = None
+
+    if config is not None and bool(config.get("log_to_file", True)):
+        try:
+            log_dir = Path(_resolve_project_path(config.get("log_dir", "logs")))
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            log_path = log_dir / f"tsumugi-{timestamp}.log"
+            suffix = 1
+            while log_path.exists():
+                log_path = log_dir / f"tsumugi-{timestamp}-{suffix:02d}.log"
+                suffix += 1
+
+            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+            file_handler.setFormatter(logging.Formatter(log_format))
+            handlers.append(file_handler)
+        except OSError as exc:
+            logging.basicConfig(
+                level=logging.INFO,
+                format=log_format,
+                handlers=[console_handler],
+                force=True,
+            )
+            logging.getLogger(__name__).warning(
+                "ログファイルを作成できません。コンソール出力のみ継続します。原因: %s",
+                exc,
+            )
+            return
+
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
+        format=log_format,
+        handlers=handlers,
+        force=True,
     )
+    if log_path is not None:
+        logging.getLogger(__name__).info("ログファイル: %s", log_path)
 
 
 def load_config() -> dict:
@@ -59,6 +98,36 @@ def load_config() -> dict:
             raise ValueError(f"config.yamlに{key}がありません。")
 
     return config
+
+
+EMOTIONS = {"normal", "happy", "sad", "shocked", "shy"}
+EMOTION_TAG_RE = re.compile(r"\\[emotion:([^]\\r\\n]*)\\]", re.IGNORECASE)
+LEADING_EMOTION_TAG_RE = re.compile(
+    r"^\\s*\\[emotion:([^]\\r\\n]*)\\]\\s*",
+    re.IGNORECASE,
+)
+
+
+def parse_emotion_response(response: str) -> tuple[str, str]:
+    """先頭の感情タグを解析し、読み上げ文字列からすべてのタグを除去する。"""
+    emotion = "normal"
+    match = LEADING_EMOTION_TAG_RE.match(response)
+    if match:
+        candidate = match.group(1).strip().casefold()
+        if candidate in EMOTIONS:
+            emotion = candidate
+        else:
+            logger.warning(
+                "未対応の感情タグ %r をnormalとして扱います。",
+                match.group(1),
+            )
+    else:
+        logger.warning("LLMの返答に先頭の感情タグがありません。normalとして扱います。")
+
+    # 先頭以外に誤って出力されたタグも読み上げない。
+    spoken_text = response[match.end():] if match else response
+    spoken_text = EMOTION_TAG_RE.sub("", spoken_text)
+    return emotion, spoken_text.strip()
 
 
 def _expand_profile_dir(path_value: str) -> str:
@@ -130,6 +199,8 @@ def create_live2d_viewer(config: dict) -> Live2DViewer | None:
             mouth_scale=float(config.get("live2d_mouth_scale", 3.0)),
             mouth_param=str(config.get("live2d_mouth_param", "")),
             idle_sway=bool(config.get("live2d_idle_sway", True)),
+            expressions=config.get("live2d_expressions"),
+            natural_idle=bool(config.get("live2d_natural_idle", True)),
         )
 
         if viewer.start():
@@ -189,8 +260,6 @@ def main() -> int:
     """アプリケーションのメイン処理。"""
     setup_logging()
 
-    logger.info("春日部つむぎAI v%s を開始します。", APP_VERSION)
-
     llm: LLMBackend | None = None
     tts: VoiceVoxTTS | None = None
     viewer: Live2DViewer | None = None
@@ -204,6 +273,8 @@ def main() -> int:
 
     try:
         config = load_config()
+        setup_logging(config)
+        logger.info("春日部つむぎAI v%s を開始します。", APP_VERSION)
         ui = ConsoleUI()
 
         # Live2Dは起動に失敗しても音声対話を継続する。
@@ -247,29 +318,38 @@ def main() -> int:
                 with ui.processing("AIの返答を待っています"):
                     response = llm.chat(user_text)
 
-                if not response.strip():
-                    logger.warning("LLMから空の返答が返されました。")
+                emotion, spoken_text = parse_emotion_response(response)
+                if not spoken_text:
+                    logger.warning("LLMから読み上げ可能な本文が返されませんでした。")
+                    if viewer is not None:
+                        viewer.set_emotion("normal")
                     continue
 
+                if viewer is not None:
+                    viewer.set_emotion(emotion)
+
                 print()
-                print(f"春日部つむぎ: {response}")
+                print(f"春日部つむぎ: {spoken_text}")
                 print()
 
                 try:
                     with ui.processing("音声を合成して再生しています"):
-                        tts.speak(response)
+                        tts.speak(spoken_text)
                 finally:
                     if viewer is not None:
                         viewer.set_mouth_open(0.0)
+                        viewer.set_emotion("normal")
 
             except KeyboardInterrupt:
                 logger.info("処理を中断しました。")
                 if viewer is not None:
                     viewer.set_mouth_open(0.0)
+                    viewer.set_emotion("normal")
                 break
             except Exception as exc:
                 if viewer is not None:
                     viewer.set_mouth_open(0.0)
+                    viewer.set_emotion("normal")
 
                 logger.error(
                     "対話処理に失敗しました: %s",
@@ -303,6 +383,7 @@ def main() -> int:
         if viewer is not None:
             try:
                 viewer.set_mouth_open(0.0)
+                viewer.set_emotion("normal")
                 viewer.close()
             except Exception:
                 logger.exception("Live2Dの終了処理に失敗しました。")
