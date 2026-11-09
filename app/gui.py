@@ -122,7 +122,6 @@ class ConversationWorker(QThread):
 
                 try:
                     self.status_changed.emit("考え中")
-                    self._viewer.set_activity("thinking")
                     response = self._llm.chat(text)
                     if self._stop_event.is_set():
                         break
@@ -133,13 +132,11 @@ class ConversationWorker(QThread):
                             "LLMから読み上げ可能な本文が返されませんでした。"
                         )
                         self.status_changed.emit("待機中")
-                        self._viewer.set_activity("idle")
                         continue
 
                     self._viewer.set_emotion(emotion)
                     self.assistant_message.emit(spoken_text)
                     self.status_changed.emit("声を生成中")
-                    self._viewer.set_activity("speaking")
                     self._tts.speak(spoken_text)
                 except Exception as exc:
                     if not self._stop_event.is_set():
@@ -148,7 +145,6 @@ class ConversationWorker(QThread):
                 finally:
                     self._viewer.set_mouth_open(0.0)
                     self._viewer.set_emotion("normal")
-                    self._viewer.set_activity("idle")
                     self.turn_finished.emit()
                     if not self._stop_event.is_set():
                         self.status_changed.emit("待機中")
@@ -160,7 +156,6 @@ class ConversationWorker(QThread):
         finally:
             self._viewer.set_mouth_open(0.0)
             self._viewer.set_emotion("normal")
-            self._viewer.set_activity("idle")
             try:
                 self._llm.close()
             except Exception:
