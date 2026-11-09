@@ -1,6 +1,6 @@
 # 春日部つむぎAI — Phase 1
 
-ChatGPT WebとVOICEVOXを連携させた音声対話アプリケーションです。
+Gemini / ChatGPT の Web 版とVOICEVOXを連携させた音声対話アプリケーションです。使用するLLMは `config.yaml` の `llm_backend` で切り替えます。
 
 ## 必要環境
 
@@ -31,7 +31,7 @@ python -m playwright install msedge
 
 ## 初回ログイン
 
-初回はChatGPTに手動でログインする必要があります。`run.bat`を実行するとEdgeが起動します。ログイン画面が表示されたら、Edgeの画面で直接ログインしてください。ログイン後、コンソールに表示される案内に従って操作します。2回目以降は不要です（ログイン状態は `browser_profile/` に保持されます）。
+初回は使用するLLM（Gemini の場合はGoogleアカウント、ChatGPT の場合はChatGPT）に手動でログインする必要があります。`run.bat`を実行するとEdgeが起動します。ログイン画面が表示されたら、Edgeの画面で直接ログインしてください。ログイン後、コンソールに表示される案内に従って操作します。2回目以降は不要です（ログイン状態は使用中のEdgeプロファイルに保持されます）。`use_real_edge_profile: true` の場合は、起動前にEdgeを完全に閉じてください。
 
 ## 起動
 
@@ -47,14 +47,19 @@ python -m playwright install msedge
 
 - `voicevox_url`: VOICEVOXのURL
 - `speaker`: VOICEVOXのスピーカーID（春日部つむぎ = 8）
+- `llm_backend`: 使用するLLM（`gemini` または `chatgpt`）
 - `browser_profile_dir`: 専用Edgeのプロファイルディレクトリ（プロジェクト直下の `./browser_profile`）
+- `use_real_edge_profile`: `true` の場合は普段使いのEdgeプロファイルを使う（起動前にEdgeを完全に閉じること。アプリ終了時に普段のEdgeは閉じない）
 - `cdp_port`: EdgeへのCDP接続ポート（既定値 9222）
 - `chatgpt_url`: ChatGPTのURL
+- `gemini_url`: GeminiのURL
 - `system_prompt`: 春日部つむぎとしての応答指示
 
 ## LLMの変更
 
-LLMの差し替えは、`app/llm_base.py`の`LLMBackend`を継承して新しいクラスを作成し、`main.py`の`create_llm()`を変更してください。
+使用するLLMは `config.yaml` の `llm_backend` で切り替えます（`gemini` / `chatgpt`）。
+
+新しいLLMを追加する場合は、`app/llm_base.py`の`LLMBackend`を継承して新しいクラスを作成し、`main.py`の`create_llm()`に追加してください。
 
 ## トラブルシューティング
 
@@ -71,6 +76,7 @@ LLMの差し替えは、`app/llm_base.py`の`LLMBackend`を継承して新しい
 
 ## バージョン
 
+- v0.3.0 — Gemini バックエンド（`app/llm_gemini.py`）を追加し、`config.yaml` の `llm_backend` で ChatGPT と切り替え可能にした。あわせて普段使いの Edge プロファイルを使う `use_real_edge_profile` オプションを追加（ChatGPT は Cloudflare の検証が突破できないため一旦休止し、Gemini を試行）
 - v0.2.0 — Edge の起動方式を CDP 接続に変更。Edge を通常プロセスとして起動し、Playwright が後から接続する方式にしたことで、Cloudflare の人間確認がループする問題への対策を強化
 - v0.1.2 — Cloudflare の人間確認がループする対策として、Edge 起動時に自動操作フラグ（`--enable-automation` / `navigator.webdriver`）を抑えるよう修正
 - v0.1.1 — setup.bat で `playwright install msedge` を自動実行するように修正
