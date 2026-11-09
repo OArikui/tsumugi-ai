@@ -132,7 +132,6 @@ class ConversationWorker(QThread):
                         self.error_occurred.emit(
                             "LLMから読み上げ可能な本文が返されませんでした。"
                         )
-                        self.turn_finished.emit()
                         self.status_changed.emit("待機中")
                         self._viewer.set_activity("idle")
                         continue
