@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from app.console_ui import ConsoleUI
 from app.llm_base import LLMBackend
 from app.llm_gemini import GeminiPlaywright
 from app.llm_playwright import ChatGPTPlaywright
@@ -46,7 +47,9 @@ def _expand_profile_dir(path_value: str) -> str:
 
 
 def _log_rms_callback(rms: float) -> None:
-    logger.info("音声出力 RMS: %.4f", rms)
+    # RMSは再生バーの音量メーター（ConsoleUI.update_playback）側で扱うため、
+    # ここでは何もしない。Phase 2 の口パク連携時に利用する想定。
+    pass
 
 
 def create_llm(config: dict) -> LLMBackend:
@@ -67,12 +70,13 @@ def create_llm(config: dict) -> LLMBackend:
     raise ValueError(f"未対応の llm_backend です: {backend}")
 
 
-def create_tts(config: dict) -> VoiceVoxTTS:
+def create_tts(config: dict, ui: ConsoleUI) -> VoiceVoxTTS:
     return VoiceVoxTTS(
         voicevox_url=config["voicevox_url"],
         speaker=int(config["speaker"]),
         rms_callback=_log_rms_callback,
         split_by_sentence=bool(config.get("tts_split_by_sentence", False)),
+        playback_callback=ui.update_playback,
     )
 
 
@@ -85,8 +89,9 @@ def main() -> int:
         print("春日部つむぎAIを開始します。")
         print()
         config = load_config()
+        ui = ConsoleUI()
         logger.info("VOICEVOXを確認しています。")
-        tts = create_tts(config)
+        tts = create_tts(config, ui)
         tts.check_connection()
         logger.info("LLMを初期化しています。")
         llm = create_llm(config)
@@ -106,17 +111,17 @@ def main() -> int:
             if not user_text:
                 continue
             try:
-                print("[処理中] AIの返答を待っています…")
                 logger.info("LLMに問い合わせています。")
-                response = llm.chat(user_text)
+                with ui.processing("AIの返答を待っています"):
+                    response = llm.chat(user_text)
                 if not response.strip():
                     logger.warning("LLMから空の返答が返されました。")
                     continue
                 print()
                 print(f"春日部つむぎ: {response}")
                 print()
-                print("[処理中] 音声を合成して再生しています…")
-                tts.speak(response)
+                with ui.processing("音声を合成して再生しています"):
+                    tts.speak(response)
             except KeyboardInterrupt:
                 logger.info("処理を中断しました。")
                 break
