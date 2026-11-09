@@ -52,6 +52,40 @@ class Live2DViewer:
         ),
     }
 
+    FACE_PARAMETER_CANDIDATES = {
+        "eye_uru": ("Param_eye_uru", "PARAM_EYE_URU"),
+        "eye_shitake": ("Param_eye_shitake", "PARAM_EYE_SHITAKE"),
+        "tear": ("Param_tear", "PARAM_TEAR"),
+        "cheek": ("Param_cheek", "PARAM_CHEEK"),
+    }
+
+    FACE_PRESETS = {
+        "normal": {"eye_uru": 0.0, "eye_shitake": 0.0, "tear": 0.0, "cheek": 0.0},
+        "happy": {"eye_uru": 0.0, "eye_shitake": 1.0, "tear": 0.0, "cheek": 0.35},
+        "sad": {"eye_uru": 1.0, "eye_shitake": 0.0, "tear": 1.0, "cheek": 0.0},
+        "shocked": {"eye_uru": 0.0, "eye_shitake": 0.0, "tear": 0.0, "cheek": 0.0},
+        "shy": {"eye_uru": 0.25, "eye_shitake": 0.0, "tear": 0.0, "cheek": 1.0},
+    }
+
+    NATURAL_IDLE_PARAMETERS = {
+        "eye_ball_x": ("ParamEyeBallX", "PARAM_EYE_BALL_X"),
+        "eye_ball_y": ("ParamEyeBallY", "PARAM_EYE_BALL_Y"),
+        "angle_x": ("ParamAngleX", "PARAM_ANGLE_X"),
+    }
+
+    EMOTIONS = ("normal", "happy", "sad", "shocked", "shy")
+    DEFAULT_EXPRESSIONS = {
+        "normal": None,
+        "happy": "きらーん",
+        "sad": "うるうる",
+        "shocked": "がーん",
+        "shy": "照れ",
+    }
+    NATURAL_IDLE_THRESHOLD = 20.0
+    REST_EYE_CLOSE_SECONDS = 1.0
+    REST_EYE_HOLD_SECONDS = 2.5
+    REST_EYE_OPEN_SECONDS = 1.0
+
     def __init__(
         self,
         model_path: str,
@@ -60,21 +94,41 @@ class Live2DViewer:
         mouth_scale: float = 3.0,
         mouth_param: str = "",
         idle_sway: bool = True,
+        expressions: dict[str, str | None] | None = None,
+        natural_idle: bool = True,
     ) -> None:
-        """モデル、ウィンドウ、口パク、待機中の揺れを設定する。"""
+        """モデル、表情、口パク、待機中の動作を設定する。"""
         self.model_path = Path(model_path).expanduser().resolve()
         self.width = max(1, int(width))
         self.height = max(1, int(height))
         self.mouth_scale = max(0.0, float(mouth_scale))
         self.mouth_param = str(mouth_param or "").strip()
         self.idle_sway = bool(idle_sway)
+        self.natural_idle = bool(natural_idle)
+
+        self.expressions = dict(self.DEFAULT_EXPRESSIONS)
+        if isinstance(expressions, dict):
+            for emotion in self.EMOTIONS:
+                if emotion in expressions:
+                    value = expressions[emotion]
+                    self.expressions[emotion] = (
+                        str(value).strip()
+                        if isinstance(value, str) and value.strip()
+                        else None
+                    )
 
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
         self._mouth_lock = threading.Lock()
+        self._expression_lock = threading.Lock()
         self._state_lock = threading.Lock()
 
         self._mouth_open = 0.0
+        self._last_mouth_activity = time.monotonic()
+        self._requested_emotion = "normal"
+        self._requested_expression = self.expressions.get("normal")
+        self._expression_revision = 0
+
         self._running = False
         self._startup_success = False
         self._thread: threading.Thread | None = None
@@ -82,6 +136,7 @@ class Live2DViewer:
         self._dll_directory_handle: Any | None = None
         self._core_dll_handle: Any | None = None
         self._idle_motion_count = 0
+        self._expression_names: set[str] = set()
 
     def _check_cancelled(self) -> None:
         """起動キャンセル要求を確認する。"""
@@ -243,6 +298,25 @@ class Live2DViewer:
         self._idle_motion_count = (
             len(idle_motions) if isinstance(idle_motions, list) else 0
         )
+
+        expression_entries = references.get("Expressions", [])
+        self._expression_names = {
+            str(entry.get("Name")).strip()
+            for entry in expression_entries
+            if isinstance(entry, dict)
+            and isinstance(entry.get("Name"), str)
+            and entry.get("Name").strip()
+        } if isinstance(expression_entries, list) else set()
+
+        if self._expression_names:
+            logger.info(
+                "モデルJSONから表情定義を読み込みました: %s",
+                ", ".join(sorted(self._expression_names)),
+            )
+        else:
+            logger.info(
+                "モデルJSONに表情定義がありません。パラメータ方式を使用します。"
+            )
         return True
 
     @staticmethod
@@ -267,46 +341,27 @@ class Live2DViewer:
     def _resolve_model_parameters(
         self,
         parameter_ids: set[str],
-    ) -> tuple[dict[str, str], dict[str, str]]:
-        """口・眼・呼吸・揺れに使う実パラメータIDを解決する。"""
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, str]]:
+        """口・眼・呼吸・揺れ・表情・自然な待機に使うIDを解決する。"""
         resolved: dict[str, str] = {}
 
         for role, candidates in self.PARAMETER_CANDIDATES.items():
             preferred_candidates = candidates
-
             if role == "mouth" and self.mouth_param:
-                preferred_candidates = (
-                    self.mouth_param,
-                    *candidates,
-                )
+                preferred_candidates = (self.mouth_param, *candidates)
 
-            parameter_id = self._resolve_parameter_id(
-                parameter_ids,
-                preferred_candidates,
-            )
-
-            if (
-                role == "mouth"
-                and self.mouth_param
-                and parameter_id is None
-            ):
+            parameter_id = self._resolve_parameter_id(parameter_ids, preferred_candidates)
+            if role == "mouth" and self.mouth_param and parameter_id is None:
                 logger.warning(
                     "指定された口パラメータID %r がモデルにありません。"
                     "標準候補から自動判定します。",
                     self.mouth_param,
                 )
-                parameter_id = self._resolve_parameter_id(
-                    parameter_ids,
-                    candidates,
-                )
+                parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
 
             if parameter_id is not None:
                 resolved[role] = parameter_id
-                logger.info(
-                    "Live2Dパラメータを解決しました: %s = %s",
-                    role,
-                    parameter_id,
-                )
+                logger.info("Live2Dパラメータを解決しました: %s = %s", role, parameter_id)
             elif role == "mouth":
                 logger.warning(
                     "口の開閉パラメータが見つかりません。"
@@ -319,33 +374,129 @@ class Live2DViewer:
                 )
 
         resolved_sway: dict[str, str] = {}
-
         if self.idle_sway:
             for role, (candidates, amplitude, period, phase) in self.SWAY_PARAMETERS.items():
-                parameter_id = self._resolve_parameter_id(
-                    parameter_ids,
-                    candidates,
-                )
-
+                parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
                 if parameter_id is not None:
                     resolved_sway[role] = parameter_id
                     logger.info(
                         "Live2D待機揺れパラメータを解決しました: %s = %s "
                         "(振幅=%.1f, 周期=%.1f秒)",
-                        role,
-                        parameter_id,
-                        amplitude,
-                        period,
+                        role, parameter_id, amplitude, period,
                     )
                 else:
-                    logger.debug(
-                        "待機揺れパラメータ %s はモデルにありません。",
-                        role,
-                    )
+                    logger.debug("待機揺れパラメータ %s はモデルにありません。", role)
         else:
             logger.info("Live2Dの待機中の揺れは無効です。")
 
-        return resolved, resolved_sway
+        resolved_face: dict[str, str] = {}
+        for role, candidates in self.FACE_PARAMETER_CANDIDATES.items():
+            parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
+            if parameter_id is not None:
+                resolved_face[role] = parameter_id
+                logger.info("感情表現パラメータを解決しました: %s = %s", role, parameter_id)
+            else:
+                logger.debug("感情表現パラメータ %s はモデルにありません。", role)
+
+        resolved_natural: dict[str, str] = {}
+        if self.natural_idle:
+            for role, candidates in self.NATURAL_IDLE_PARAMETERS.items():
+                parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
+                if parameter_id is not None:
+                    resolved_natural[role] = parameter_id
+                    logger.info("自然な待機パラメータを解決しました: %s = %s", role, parameter_id)
+                else:
+                    logger.debug("自然な待機パラメータ %s はモデルにありません。", role)
+        else:
+            logger.info("自然な休憩状態は無効です。")
+
+        return resolved, resolved_sway, resolved_face, resolved_natural
+
+    def _get_expression_request(self) -> tuple[str, str | None, int]:
+        """描画スレッド用に最新の感情リクエストを取得する。"""
+        with self._expression_lock:
+            return (
+                self._requested_emotion,
+                self._requested_expression,
+                self._expression_revision,
+            )
+
+    def _activate_expression(
+        self,
+        model: Any,
+        emotion: str,
+        expression_name: str | None,
+        resolved_face: dict[str, str],
+    ) -> tuple[bool, dict[str, float]]:
+        """モデルAPIを優先し、未対応時は表情パラメータのプリセットへ切り替える。"""
+        available_names = {
+            name.casefold(): name for name in self._expression_names
+        }
+        setter = getattr(model, "SetExpression", None)
+        resetter = getattr(model, "ResetExpression", None)
+        if not callable(resetter):
+            resetter = getattr(model, "ResetExpressions", None)
+
+        if expression_name is not None:
+            actual_name = available_names.get(expression_name.casefold())
+            if actual_name is not None and callable(setter):
+                try:
+                    setter(actual_name)
+                    logger.info(
+                        "Live2D表情を適用しました: emotion=%s, expression=%s",
+                        emotion,
+                        actual_name,
+                    )
+                    return False, {}
+                except Exception as exc:
+                    logger.warning(
+                        "Live2D表情APIで %s を適用できません。"
+                        "パラメータ方式へ切り替えます。原因: %s",
+                        expression_name,
+                        exc,
+                    )
+            elif actual_name is None:
+                logger.warning(
+                    "表情 %r はmodel3.jsonのExpressionsにありません。"
+                    "パラメータ方式へフォールバックします。",
+                    expression_name,
+                )
+            else:
+                logger.warning(
+                    "live2d-pyにSetExpression APIがありません。"
+                    "パラメータ方式へフォールバックします。"
+                )
+        elif callable(resetter):
+            try:
+                resetter()
+                logger.debug("Live2D表情をnormalに戻しました。")
+                return False, {}
+            except Exception as exc:
+                logger.warning(
+                    "Live2D表情をリセットできません。"
+                    "パラメータ方式へ切り替えます。原因: %s",
+                    exc,
+                )
+
+        preset = self.FACE_PRESETS.get(emotion, self.FACE_PRESETS["normal"])
+        if not resolved_face:
+            logger.warning(
+                "表情APIと代替パラメータの両方が利用できません。"
+                "Live2D表示は継続しますが、感情表現は省略します。"
+            )
+        else:
+            logger.info("感情表現をパラメータ方式で適用します: %s", emotion)
+        return True, preset
+
+    @staticmethod
+    def _apply_face_preset(
+        model: Any,
+        resolved_face: dict[str, str],
+        preset: dict[str, float],
+    ) -> None:
+        """解決済みの表情パラメータへプリセット値を反映する。"""
+        for role, parameter_id in resolved_face.items():
+            model.SetParamById(parameter_id, float(preset.get(role, 0.0)))
 
     def start(self) -> bool:
         """Live2Dウィンドウと描画スレッドを開始する。"""
@@ -435,6 +586,46 @@ class Live2DViewer:
         with self._mouth_lock:
             return self._mouth_open
 
+    def _get_mouth_state(self) -> tuple[float, float]:
+        """口の開き具合と最後に口が動いた時刻を取得する。"""
+        with self._mouth_lock:
+            return self._mouth_open, self._last_mouth_activity
+
+    def set_emotion(self, emotion: str) -> None:
+        """感情名をスレッドセーフに受け取り、描画スレッドへ反映を依頼する。"""
+        emotion_key = str(emotion or "normal").strip().casefold()
+        if emotion_key not in self.EMOTIONS:
+            logger.warning("未対応の感情 %r をnormalとして扱います。", emotion)
+            emotion_key = "normal"
+
+        expression_name = self.expressions.get(emotion_key)
+        with self._expression_lock:
+            self._requested_emotion = emotion_key
+            self._requested_expression = expression_name
+            self._expression_revision += 1
+
+    def set_expression(self, name: str | None) -> None:
+        """表情名をスレッドセーフに受け取り、描画スレッドへ反映を依頼する。"""
+        expression_name = (
+            str(name).strip()
+            if isinstance(name, str) and name.strip()
+            else None
+        )
+        emotion = "normal"
+        if expression_name is not None:
+            for candidate_emotion, configured_name in self.expressions.items():
+                if (
+                    configured_name is not None
+                    and configured_name.casefold() == expression_name.casefold()
+                ):
+                    emotion = candidate_emotion
+                    break
+
+        with self._expression_lock:
+            self._requested_emotion = emotion
+            self._requested_expression = expression_name
+            self._expression_revision += 1
+
     def _render_loop(self) -> None:
         """GLFW・OpenGL・Live2Dの操作を専用スレッド内で完結させる。"""
         glfw = None
@@ -501,9 +692,12 @@ class Live2DViewer:
             model.SetAutoBreath(False)
 
             parameter_ids = set(model.GetParamIds())
-            resolved_parameters, resolved_sway = (
-                self._resolve_model_parameters(parameter_ids)
-            )
+            (
+                resolved_parameters,
+                resolved_sway,
+                resolved_face,
+                resolved_natural,
+            ) = self._resolve_model_parameters(parameter_ids)
 
             def on_framebuffer_resize(
                 resized_window: Any,
@@ -545,6 +739,16 @@ class Live2DViewer:
             next_blink_time = initial_time + random.uniform(3.0, 5.0)
             blink_start_time: float | None = None
 
+            last_expression_revision = -1
+            use_face_fallback = False
+            active_face_preset: dict[str, float] = {}
+
+            rest_started_at: float | None = None
+            next_rest_close_time: float | None = None
+            rest_close_start_time: float | None = None
+            next_rest_close_delay = random.uniform(6.0, 12.0)
+            rest_gaze_phase = random.uniform(0.0, math.tau)
+
             with self._state_lock:
                 self._startup_success = True
                 self._running = True
@@ -567,7 +771,29 @@ class Live2DViewer:
                 delta_time = max(0.0, min(now - last_frame_time, 0.1))
                 last_frame_time = now
 
+                emotion, expression_name, expression_revision = (
+                    self._get_expression_request()
+                )
+                if expression_revision != last_expression_revision:
+                    (
+                        use_face_fallback,
+                        active_face_preset,
+                    ) = self._activate_expression(
+                        model,
+                        emotion,
+                        expression_name,
+                        resolved_face,
+                    )
+                    last_expression_revision = expression_revision
+
                 model.Update(delta_time)
+
+                if use_face_fallback:
+                    self._apply_face_preset(
+                        model,
+                        resolved_face,
+                        active_face_preset,
+                    )
 
                 mouth_id = resolved_parameters.get("mouth")
                 if mouth_id is not None:
@@ -576,16 +802,61 @@ class Live2DViewer:
                         self._get_mouth_open(),
                     )
 
-                # まばたき
+                # 20秒以上口が動いていない場合は、休憩状態へ移行する。
+                _, last_mouth_activity = self._get_mouth_state()
+                resting = (
+                    self.natural_idle
+                    and now - last_mouth_activity >= self.NATURAL_IDLE_THRESHOLD
+                )
+
+                rest_eye_open = 1.0
+                rest_elapsed = 0.0
+                if resting:
+                    if rest_started_at is None:
+                        rest_started_at = now
+                        next_rest_close_time = now + next_rest_close_delay
+                        logger.info("Live2Dが自然な休憩状態に入りました。")
+
+                    rest_elapsed = now - rest_started_at
+                    if (
+                        rest_close_start_time is None
+                        and next_rest_close_time is not None
+                        and now >= next_rest_close_time
+                    ):
+                        rest_close_start_time = now
+
+                    if rest_close_start_time is not None:
+                        close_elapsed = now - rest_close_start_time
+                        close_end = self.REST_EYE_CLOSE_SECONDS
+                        hold_end = close_end + self.REST_EYE_HOLD_SECONDS
+                        open_end = hold_end + self.REST_EYE_OPEN_SECONDS
+
+                        if close_elapsed < close_end:
+                            rest_eye_open = 1.0 - close_elapsed / close_end
+                        elif close_elapsed < hold_end:
+                            rest_eye_open = 0.0
+                        elif close_elapsed < open_end:
+                            rest_eye_open = (
+                                close_elapsed - hold_end
+                            ) / self.REST_EYE_OPEN_SECONDS
+                        else:
+                            rest_close_start_time = None
+                            next_rest_close_time = now + random.uniform(18.0, 28.0)
+                            rest_eye_open = 1.0
+                else:
+                    if rest_started_at is not None:
+                        logger.info("Live2Dが通常の待機状態に戻りました。")
+                    rest_started_at = None
+                    next_rest_close_time = None
+                    rest_close_start_time = None
+
+                # 通常のまばたき。休憩中はゆっくりした閉眼動作を重ねる。
                 if blink_start_time is None and now >= next_blink_time:
                     blink_start_time = now
 
                 blink_open = 1.0
                 if blink_start_time is not None:
-                    progress = (
-                        now - blink_start_time
-                    ) / self.BLINK_DURATION
-
+                    progress = (now - blink_start_time) / self.BLINK_DURATION
                     if progress >= 1.0:
                         blink_start_time = None
                         next_blink_time = now + random.uniform(3.0, 5.0)
@@ -593,8 +864,9 @@ class Live2DViewer:
                         blink_open = 1.0 - progress * 2.0
                     else:
                         blink_open = (progress - 0.5) * 2.0
-
                     blink_open = max(0.0, min(1.0, blink_open))
+
+                blink_open *= rest_eye_open
 
                 left_eye_id = resolved_parameters.get("left_eye")
                 if left_eye_id is not None:
@@ -626,6 +898,33 @@ class Live2DViewer:
                             elapsed * 2.0 * math.pi / period + phase
                         )
                         model.AddParamById(parameter_id, sway_value)
+
+                # 休憩中は視線をゆっくり動かし、ときどき少し横を向く。
+                if resting:
+                    gaze_x_id = resolved_natural.get("eye_ball_x")
+                    if gaze_x_id is not None:
+                        gaze_x = 0.16 * math.sin(
+                            rest_elapsed * 2.0 * math.pi / 11.0 + rest_gaze_phase
+                        )
+                        model.AddParamById(gaze_x_id, gaze_x)
+
+                    gaze_y_id = resolved_natural.get("eye_ball_y")
+                    if gaze_y_id is not None:
+                        gaze_y = 0.10 * math.sin(
+                            rest_elapsed * 2.0 * math.pi / 14.0
+                            + rest_gaze_phase * 0.7
+                        )
+                        model.AddParamById(gaze_y_id, gaze_y)
+
+                    head_angle_id = resolved_natural.get("angle_x")
+                    if head_angle_id is not None:
+                        turn_phase = rest_elapsed % 29.0
+                        head_turn = (
+                            1.2 * math.sin(math.pi * turn_phase / 7.0)
+                            if turn_phase < 7.0
+                            else 0.0
+                        )
+                        model.AddParamById(head_angle_id, head_turn)
 
                 live2d.clearBuffer(0.96, 0.96, 0.98, 1.0)
                 model.Draw()
