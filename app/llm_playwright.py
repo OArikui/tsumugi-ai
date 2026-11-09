@@ -2,8 +2,10 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 from playwright.sync_api import Browser, BrowserContext, Locator, Page, Playwright, sync_playwright
 
@@ -15,6 +17,7 @@ logger = logging.getLogger(__name__)
 class ChatGPTPlaywright(LLMBackend):
     # サービスのタブを見分けるためのホスト名（ログイン画面のドメインも含む）
     PAGE_HOSTS = ["chatgpt.com", "auth.openai.com"]
+    LOGIN_SERVICE = "ChatGPT"
 
     INPUT_SELECTORS = [
         "#prompt-textarea",
@@ -44,6 +47,8 @@ class ChatGPTPlaywright(LLMBackend):
         poll_interval: float = 0.5,
         cdp_port: int = 9222,
         use_real_edge_profile: bool = False,
+        login_callback: Callable[[str], bool] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         self.chatgpt_url = chatgpt_url
         self.browser_profile_dir = browser_profile_dir
@@ -53,6 +58,8 @@ class ChatGPTPlaywright(LLMBackend):
         self.poll_interval = poll_interval
         self.cdp_port = cdp_port
         self.use_real_edge_profile = use_real_edge_profile
+        self.login_callback = login_callback
+        self.stop_event = stop_event
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
@@ -183,34 +190,47 @@ class ChatGPTPlaywright(LLMBackend):
             except Exception as exc:
                 raise RuntimeError("ChatGPTのページを開くことができませんでした。") from exc
 
+    def _check_stop_requested(self) -> None:
+        if self.stop_event is not None and self.stop_event.is_set():
+            raise RuntimeError("アプリケーションの終了要求を受け取りました。")
+
     def _wait_for_login(self) -> Locator:
-        """ログインしていない場合、手動ログインを待つ。"""
+        """ログインしていない場合、GUIコールバックまたはCLI入力で完了を待つ。"""
         if self.page is None:
             raise RuntimeError("ChatGPTのページがありません。")
+        self._check_stop_requested()
         input_box = self._find_input()
         if input_box is not None:
             return input_box
-        print()
-        print("=" * 55)
-        print("ChatGPTへのログインが必要です。")
-        print("Edgeの画面でChatGPTに手動ログインしてください。")
-        print("ログイン完了後、この画面でEnterを押してください。")
-        print("=" * 55)
-        input("ログイン完了後、Enterを押してください: ")
+
+        if self.login_callback is not None:
+            logger.info("%sへのログインをGUIで待機します。", self.LOGIN_SERVICE)
+            if not self.login_callback(self.LOGIN_SERVICE):
+                raise RuntimeError("ログイン待ちがキャンセルされました。")
+        else:
+            print()
+            print("=" * 55)
+            print(f"{self.LOGIN_SERVICE}へのログインが必要です。")
+            print(f"Edgeの画面で{self.LOGIN_SERVICE}に手動ログインしてください。")
+            print("ログイン完了後、この画面でEnterを押してください。")
+            print("=" * 55)
+            input("ログイン完了後、Enterを押してください: ")
+
+        self._check_stop_requested()
         try:
             self.page.bring_to_front()
         except Exception:
             logger.warning("Edgeの画面を前面に表示できませんでした。")
         deadline = time.monotonic() + self.max_wait_seconds
         while time.monotonic() < deadline:
+            self._check_stop_requested()
             input_box = self._find_input()
             if input_box is not None:
-                logger.info("ChatGPTへのログインを確認しました。")
+                logger.info("%sへのログインを確認しました。", self.LOGIN_SERVICE)
                 return input_box
             time.sleep(self.poll_interval)
         raise RuntimeError(
-            "ログイン後も入力欄が見つかりません。"
-            "ChatGPTの画面を確認してください。"
+            f"ログイン後も入力欄が見つかりません。{self.LOGIN_SERVICE}の画面を確認してください。"
         )
 
     def _find_input(self) -> Locator | None:
@@ -285,6 +305,7 @@ class ChatGPTPlaywright(LLMBackend):
         last_change = time.monotonic()
         response_started = False
         while time.monotonic() < deadline:
+            self._check_stop_requested()
             try:
                 assistant_messages = self._find_assistant_messages()
                 count = assistant_messages.count()
@@ -319,6 +340,7 @@ class ChatGPTPlaywright(LLMBackend):
 
     def start(self) -> None:
         """Edgeを起動し、ログイン待ちまで行う。"""
+        self._check_stop_requested()
         self._start()
         self._wait_for_login()
 
@@ -326,6 +348,7 @@ class ChatGPTPlaywright(LLMBackend):
         """ユーザーの文章を送信し、返答を取得する。"""
         if not user_text.strip():
             raise ValueError("送信する文章が空です。")
+        self._check_stop_requested()
         self._start()
         if self.page is None:
             raise RuntimeError("ChatGPTのページが初期化されていません。")
