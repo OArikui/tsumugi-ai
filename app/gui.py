@@ -180,8 +180,7 @@ class ConversationWorker(QThread):
                         recognized_text = self._stt.stop_recording_and_transcribe()
                         if recognized_text:
                             self.transcript_ready.emit(recognized_text)
-                        else:
-                            self.status_changed.emit("待機中")
+                        self.status_changed.emit("待機中")
                     except Exception as exc:
                         self._disable_stt(str(exc))
                         self.status_changed.emit("待機中")
