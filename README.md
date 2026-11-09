@@ -187,6 +187,7 @@ live2d_expressions:
   shy: "照れ"
 log_to_file: true
 log_dir: "logs"
+gui_enabled: true
 ~~~
 
 | 設定 | 説明 | 既定値 |
