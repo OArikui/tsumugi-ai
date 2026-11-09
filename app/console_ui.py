@@ -92,14 +92,43 @@ class ConsoleUI:
         with self._lock:
             self._mode = "idle"
 
+    def finish(self) -> None:
+        """完了表示にする: バーを全部塗りつぶした状態で1行残す。"""
+        with self._lock:
+            mode = self._mode
+            label = self._label
+        if self._thread is not None:
+            self._stop_event.set()
+            self._thread.join(timeout=1.0)
+            self._thread = None
+        if mode == "playback":
+            line = f"[再生中] {_bar(1.0, 24)} 100.0%  音量 {_bar(0.0, 10)}"
+        else:
+            line = f"[処理中] {label} {_bar(1.0, 24)} 完了"
+        self._stream.write("\r" + line + "   \n")
+        self._stream.flush()
+        with self._lock:
+            self._mode = "idle"
+            self._progress = 0.0
+            self._rms = 0.0
+
     @contextmanager
     def processing(self, label: str) -> Iterator[None]:
-        """処理中バーを表示するコンテキストマネージャ。"""
+        """処理中バーを表示するコンテキストマネージャ。
+
+        正常に終わった場合だけ完了表示（バーを塗りつぶして残す）にし、
+        例外時は行を消すだけにする。
+        """
         self.start(label)
+        succeeded = False
         try:
             yield
+            succeeded = True
         finally:
-            self.stop()
+            if succeeded:
+                self.finish()
+            else:
+                self.stop()
 
     # TTSからの進捗通知 -------------------------------------------------
 
