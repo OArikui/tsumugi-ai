@@ -478,6 +478,13 @@ class Live2DViewer:
                     exc,
                 )
 
+        # 直前にAPI表情を設定していた場合、パラメータ方式へ移る前に解除する。
+        if callable(resetter):
+            try:
+                resetter()
+            except Exception as exc:
+                logger.debug("切替前の表情リセットに失敗しました: %s", exc)
+
         preset = self.FACE_PRESETS.get(emotion, self.FACE_PRESETS["normal"])
         if not resolved_face:
             logger.warning(
@@ -580,7 +587,10 @@ class Live2DViewer:
 
         with self._mouth_lock:
             clamped_value = max(0.0, min(1.0, mouth_value))
-            if abs(clamped_value - self._mouth_open) >= 0.02:
+            if (
+                clamped_value >= 0.03
+                or abs(clamped_value - self._mouth_open) >= 0.02
+            ):
                 self._last_mouth_activity = time.monotonic()
             self._mouth_open = clamped_value
 
