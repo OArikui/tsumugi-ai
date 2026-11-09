@@ -243,7 +243,7 @@ class MainWindow(QMainWindow):
         self.send_button = QPushButton("送信", conversation_panel)
         self.send_button.setEnabled(False)
         self.send_button.setMinimumHeight(42)
-        self.send_button.clicked.connect(self._send_message)
+        self.send_button.clicked.connect(lambda _checked=False: self._send_message())
         entry_row.addWidget(self.input_field, 1)
         entry_row.addWidget(self.send_button)
         conversation_layout.addLayout(entry_row)
@@ -257,7 +257,7 @@ class MainWindow(QMainWindow):
         self.hint_label.setStyleSheet("color: #8795A7;")
         footer.addWidget(self.hint_label, 1)
         self.exit_button = QPushButton("終了")
-        self.exit_button.clicked.connect(self.close)
+        self.exit_button.clicked.connect(lambda _checked=False: self.close())
         footer.addWidget(self.exit_button)
         root.addLayout(footer)
 
@@ -392,10 +392,10 @@ class MainWindow(QMainWindow):
         layout.addLayout(buttons)
 
         complete_button.clicked.connect(
-            lambda: self._finish_login_dialog(dialog, True)
+            lambda _checked=False: self._finish_login_dialog(dialog, True)
         )
         cancel_button.clicked.connect(
-            lambda: self._finish_login_dialog(dialog, False)
+            lambda _checked=False: self._finish_login_dialog(dialog, False)
         )
         dialog.finished.connect(
             lambda _result: self._finish_login_dialog(dialog, False)
