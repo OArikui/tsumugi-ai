@@ -295,7 +295,7 @@ class MainWindow(QMainWindow):
         self._worker.error_occurred.connect(self._show_error)
         self._worker.turn_finished.connect(self._on_turn_finished)
         self._worker.finished.connect(self._on_worker_finished)
-        QTimer.singleShot(0, self._worker.start)
+        self._worker.start()
 
     @Slot(str)
     def _set_status(self, status: str) -> None:
