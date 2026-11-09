@@ -2,7 +2,7 @@
 
 Gemini / ChatGPT WebとVOICEVOXを連携させた音声対話アプリケーションです。使用するLLMは config.yaml の llm_backend で切り替えます。
 
-v0.6.1では公式Live2DモデルのパラメータIDに対応し、待機中のゆらゆら揺れを追加しました。
+v0.7.0ではLLMの感情タグに応じた表情、長時間待機時の自然な休憩動作、実行ごとのログファイル出力に対応しました。
 
 ## 必要環境
 
@@ -69,11 +69,14 @@ use_real_edge_profile が true の場合は、アプリ起動前にEdgeを完全
 ## 機能
 
 - Live2Dモデルを独立ウィンドウに表示
+- LLMの感情タグ（normal / happy / sad / shocked / shy）に応じた表情
 - VOICEVOXのRMS音量に応じた口パク
 - 自動まばたき
 - sin波による呼吸表現
 - 待機中の角度・体のゆらゆら揺れ
+- 20秒以上口が動かなければ、長めの閉眼・視線移動・小さな首振りを行う自然な休憩状態
 - モデルにIdleモーションが定義されていれば起動時に再生
+- 実行ごとのUTF-8ログファイル（logs/）とコンソールへの同時出力
 - Live2Dが利用できない場合はアバターなしで音声対話を継続
 
 描画は専用スレッドで実行し、音声再生側からは口の開き具合のみをスレッドセーフに更新します。
@@ -166,21 +169,80 @@ live2d_height: 640
 live2d_mouth_scale: 3.0
 live2d_mouth_param: ""
 live2d_idle_sway: true
+live2d_natural_idle: true
+live2d_expressions:
+  normal: null
+  happy: "きらーん"
+  sad: "うるうる"
+  shocked: "がーん"
+  shy: "照れ"
+log_to_file: true
+log_dir: "logs"
 ~~~
 
 | 設定 | 説明 | 既定値 |
 |---|---|---|
-| live2d_enabled | Live2Dを使用するか | false |
+| live2d_enabled | Live2Dを使用するか | true |
 | live2d_model_path | CubismモデルJSONのパス | 上記配置例 |
 | live2d_width | ウィンドウ幅 | 480 |
 | live2d_height | ウィンドウ高さ | 640 |
 | live2d_mouth_scale | 口パクの感度 | 3.0 |
 | live2d_mouth_param | 口開閉パラメータID。空文字なら自動判定 | 空文字 |
-| live2d_idle_sway | 待機中のゆらゆら揺れ | true |
+| live2d_idle_sway | 待機中の角度・体のゆらゆら揺れ | true |
+| live2d_natural_idle | 20秒以上口が動かないときの自然な休憩状態 | true |
+| live2d_expressions | 感情ごとの表情名。nullはnormal | 下記の例 |
+| log_to_file | 実行ごとのログファイルを出力するか | true |
+| log_dir | ログの保存先（相対パスはプロジェクトルート基準） | logs |
 
 設定キーがconfig.yamlに存在しない場合は、main.py側の既定値を使用します。
 
-## 5. パラメータIDの自動判定
+## 5. 感情表現
+
+LLMには返答の先頭へ次のいずれか1つを付けるよう system_prompt で指示します。
+
+| タグ | 意味 | 既定の表情 |
+|---|---|---|
+| [emotion:normal] | 通常 | 表情をリセット |
+| [emotion:happy] | うれしい | きらーん |
+| [emotion:sad] | 悲しい | うるうる |
+| [emotion:shocked] | 驚き | がーん |
+| [emotion:shy] | 照れ | 照れ |
+
+main.py は先頭のタグを解析して読み上げ本文から取り除きます。先頭以外に誤って出力された感情タグも読み上げないよう除去します。タグがない、または種類が不正な場合はnormalとして扱います。読み上げが終わるとnormalへ戻します。
+
+表情名は live2d_expressions で変更できます。値は model3.json の FileReferences.Expressions に登録された Name と一致させてください。null は通常表情へのリセットです。
+
+~~~yaml
+live2d_expressions:
+  normal: null
+  happy: "きらーん"
+  sad: "うるうる"
+  shocked: "がーん"
+  shy: "照れ"
+~~~
+
+モデルの表情APIが使えない場合は、Param_eye_uru / Param_eye_shitake / Param_tear / Param_cheek などのパラメータを大文字小文字を区別せず検索し、感情プリセットを適用します。どちらの方式も使えない場合は警告を出し、Live2Dと音声対話は継続します。
+
+## 6. 自然な休憩状態
+
+live2d_natural_idle: true の場合、最後に口パクの値が変化してから20秒以上経過すると休憩状態になります。休憩中は、ときどきゆっくり目を閉じて数秒保ち、視線を小さく動かし、周期的にわずかに横を向きます。口が再び動くと通常の待機状態へ戻ります。
+
+~~~yaml
+live2d_natural_idle: true
+~~~
+
+live2d_idle_sway は従来の角度・体のゆらゆら揺れを制御し、live2d_natural_idle は休憩時の閉眼・視線・首振りを制御します。両者は独立して切り替えられます。
+
+## 7. ログファイル
+
+log_to_file: true の場合、起動ごとに logs/tsumugi-YYYYMMDD-HHMMSS.log を作成します。文字コードはUTF-8で、コンソールと同じ書式のログを同時に記録します。保存先は log_dir で変更できます。ログファイルと logs/ フォルダはGit管理対象外です。
+
+~~~yaml
+log_to_file: true
+log_dir: "logs"
+~~~
+
+## 8. パラメータIDの自動判定
 
 モデルごとにCubismパラメータIDの表記が異なるため、起動時に model.GetParamIds() から実際のIDを取得し、候補名を大文字小文字を区別せず照合します。
 
@@ -205,7 +267,7 @@ live2d_mouth_param: "PARAM_MOUTH_OPEN_Y"
 
 口のIDが解決できない場合は警告を出して口パクだけを省略します。眼や呼吸のパラメータがない場合も、その演出だけを省略して表示を継続します。
 
-## 6. 待機中のゆらゆら揺れ
+## 9. 待機中のゆらゆら揺れ
 
 live2d_idle_sway: true の場合、描画フレームごとに角度・体のパラメータへ小さなsin波を加算します。
 
@@ -225,7 +287,7 @@ live2d_idle_sway: true の場合、描画フレームごとに角度・体のパ
 live2d_idle_sway: false
 ~~~
 
-## 7. 口パク
+## 10. 口パク
 
 VOICEVOXの再生コールバックから音声チャンクごとのRMSを受け取ります。
 
@@ -233,7 +295,7 @@ RMSに live2d_mouth_scale を掛け、0.0〜1.0に制限した値をLive2Dに渡
 
 音声再生終了後は、口の開き具合を0.0に戻します。
 
-## 8. 待機中の演出
+## 11. 待機中の演出
 
 ### まばたき
 
@@ -247,7 +309,7 @@ ParamBreath / PARAM_BREATH をsin波でゆっくり変化させます。
 
 モデルJSONの FileReferences.Motions.Idle を確認し、Idleグループが定義されていれば最初のモーションを起動時に再生します。
 
-## 9. トラブルシューティング
+## 12. トラブルシューティング
 
 ### Live2Dが表示されない
 
@@ -294,6 +356,7 @@ config.yamlの llm_backend を gemini または chatgpt に変更します。
 
 # バージョン履歴
 
+- v0.7.0 — LLMの先頭感情タグを解析して読み上げ文から除去し、Live2D表情APIまたは表情パラメータプリセットで感情表現を追加。20秒以上の無発話時に閉眼・視線移動・小さな首振りを行う自然な休憩状態、Live2D既定有効化、実行ごとのUTF-8ログファイル出力に対応。
 - v0.6.1 — 公式Live2Dモデルの PARAM_ 形式パラメータIDに対応。口・眼・呼吸パラメータを大文字小文字を区別せず自動解決し、live2d_mouth_param による口パラメータの明示指定を追加。待機中の角度・体のゆらゆら揺れと live2d_idle_sway 設定を追加。
 - v0.6.0 — Phase 2。Live2DViewerを追加。別スレッドでのモデル描画、VOICEVOX RMS連携による口パク、自動まばたき、呼吸表現、Idleモーション再生に対応。Live2Dが利用できない場合はアバターなしで継続するフォールバックを追加。
 - v0.5.1 — 処理が完了したときにバーを全部塗りつぶした状態で1行残すよう変更。例外時は完了表示を出さずに行を消す。
