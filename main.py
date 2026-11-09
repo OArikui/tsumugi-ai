@@ -101,9 +101,9 @@ def load_config() -> dict:
 
 
 EMOTIONS = {"normal", "happy", "sad", "shocked", "shy"}
-EMOTION_TAG_RE = re.compile(r"\\[emotion:([^]\\r\\n]*)\\]", re.IGNORECASE)
+EMOTION_TAG_RE = re.compile(r"\[emotion:([^\]\r\n]*)\]", re.IGNORECASE)
 LEADING_EMOTION_TAG_RE = re.compile(
-    r"^\\s*\\[emotion:([^]\\r\\n]*)\\]\\s*",
+    r"^\s*\[emotion:([^\]\r\n]*)\]\s*",
     re.IGNORECASE,
 )
 
@@ -179,7 +179,7 @@ def create_llm(config: dict) -> LLMBackend:
 
 def create_live2d_viewer(config: dict) -> Live2DViewer | None:
     """Live2Dが正常に起動した場合だけビューアを返す。"""
-    if not bool(config.get("live2d_enabled", False)):
+    if not bool(config.get("live2d_enabled", True)):
         logger.info("Live2Dは無効です。")
         return None
 
