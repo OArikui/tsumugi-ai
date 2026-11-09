@@ -62,7 +62,8 @@ class SpeechToText:
     @property
     def is_recording(self) -> bool:
         with self._lock:
-            return self._recording
+            # 上限時間でCallbackStopした後も、未回収のストリームを録音中として扱う。
+            return self._recording or self._stream is not None
 
     def prepare(self) -> None:
         """マイクを確認し、faster-whisperモデルをロードする。"""
@@ -175,6 +176,7 @@ class SpeechToText:
             self._max_duration_reached.clear()
             self._recording = True
 
+        stream = None
         try:
             stream = self._sounddevice.InputStream(
                 device=self._input_device,
@@ -191,6 +193,12 @@ class SpeechToText:
         except Exception:
             with self._lock:
                 self._recording = False
+                self._stream = None
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    logger.debug("失敗した録音ストリームを解放できませんでした。", exc_info=True)
             logger.warning("マイク録音を開始できません。", exc_info=True)
             raise
 
