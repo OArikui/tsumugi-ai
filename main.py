@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from app.llm_base import LLMBackend
+from app.llm_gemini import GeminiPlaywright
 from app.llm_playwright import ChatGPTPlaywright
 from app.tts_voicevox import VoiceVoxTTS
 
@@ -49,12 +50,21 @@ def _log_rms_callback(rms: float) -> None:
 
 
 def create_llm(config: dict) -> LLMBackend:
-    return ChatGPTPlaywright(
-        chatgpt_url=config["chatgpt_url"],
-        browser_profile_dir=_expand_profile_dir(config["browser_profile_dir"]),
-        system_prompt=config["system_prompt"],
-        cdp_port=int(config.get("cdp_port", 9222)),
-    )
+    backend = str(config.get("llm_backend", "chatgpt")).lower()
+    common = {
+        "browser_profile_dir": _expand_profile_dir(config["browser_profile_dir"]),
+        "system_prompt": config["system_prompt"],
+        "cdp_port": int(config.get("cdp_port", 9222)),
+        "use_real_edge_profile": bool(config.get("use_real_edge_profile", False)),
+    }
+    if backend == "gemini":
+        return GeminiPlaywright(
+            gemini_url=config.get("gemini_url", "https://gemini.google.com/app"),
+            **common,
+        )
+    if backend == "chatgpt":
+        return ChatGPTPlaywright(chatgpt_url=config["chatgpt_url"], **common)
+    raise ValueError(f"未対応の llm_backend です: {backend}")
 
 
 def create_tts(config: dict) -> VoiceVoxTTS:

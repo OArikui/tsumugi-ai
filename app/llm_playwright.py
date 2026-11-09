@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class ChatGPTPlaywright(LLMBackend):
+    # サービスのタブを見分けるためのホスト名（ログイン画面のドメインも含む）
+    PAGE_HOSTS = ["chatgpt.com", "auth.openai.com"]
+
     INPUT_SELECTORS = [
         "#prompt-textarea",
         "div[contenteditable='true'][data-placeholder]",
@@ -40,6 +43,7 @@ class ChatGPTPlaywright(LLMBackend):
         stable_seconds: float = 3.0,
         poll_interval: float = 0.5,
         cdp_port: int = 9222,
+        use_real_edge_profile: bool = False,
     ) -> None:
         self.chatgpt_url = chatgpt_url
         self.browser_profile_dir = browser_profile_dir
@@ -48,6 +52,7 @@ class ChatGPTPlaywright(LLMBackend):
         self.stable_seconds = stable_seconds
         self.poll_interval = poll_interval
         self.cdp_port = cdp_port
+        self.use_real_edge_profile = use_real_edge_profile
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
@@ -77,6 +82,27 @@ class ChatGPTPlaywright(LLMBackend):
             "Edgeがインストールされているか確認してください。"
         )
 
+    def _resolve_profile_dir(self) -> Path:
+        """使用するEdgeプロファイルのディレクトリを返す。
+
+        実プロファイルモードでは普段使いの Edge の User Data を使う。
+        作りたての専用プロファイルは Cloudflare に信用されにくいため。
+        """
+        if self.use_real_edge_profile:
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if not local_app_data:
+                raise RuntimeError("LOCALAPPDATA が取得できませんでした。")
+            profile_dir = Path(local_app_data) / "Microsoft" / "Edge" / "User Data"
+            if not profile_dir.is_dir():
+                raise RuntimeError(
+                    "普段使いのEdgeプロファイルが見つかりません: "
+                    f"{profile_dir}"
+                )
+            return profile_dir
+        profile_dir = Path(self.browser_profile_dir).resolve()
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        return profile_dir
+
     def _start(self) -> None:
         """Edgeを通常アプリとして起動し、CDPで接続してChatGPTを開く。
 
@@ -86,8 +112,7 @@ class ChatGPTPlaywright(LLMBackend):
         """
         if self.page is not None:
             return
-        profile_dir = Path(self.browser_profile_dir).resolve()
-        profile_dir.mkdir(parents=True, exist_ok=True)
+        profile_dir = self._resolve_profile_dir()
         self.playwright = sync_playwright().start()
         endpoint = f"http://127.0.0.1:{self.cdp_port}"
         # 既に同じポートでEdgeが起動していなければ、通常プロセスとして起動する
@@ -98,15 +123,16 @@ class ChatGPTPlaywright(LLMBackend):
         if self.browser is None:
             edge_path = self._find_edge_executable()
             logger.info("Microsoft Edgeを起動しています（CDPポート: %s）", self.cdp_port)
-            self.edge_process = subprocess.Popen(
-                [
-                    edge_path,
-                    f"--remote-debugging-port={self.cdp_port}",
-                    f"--user-data-dir={profile_dir}",
-                    "--start-maximized",
-                    self.chatgpt_url,
-                ]
-            )
+            launch_args = [
+                edge_path,
+                f"--remote-debugging-port={self.cdp_port}",
+                f"--user-data-dir={profile_dir}",
+                "--start-maximized",
+            ]
+            if self.use_real_edge_profile:
+                launch_args.append("--profile-directory=Default")
+            launch_args.append(self.chatgpt_url)
+            self.edge_process = subprocess.Popen(launch_args)
             deadline = time.monotonic() + 30.0
             last_error: Exception | None = None
             while time.monotonic() < deadline:
@@ -119,9 +145,14 @@ class ChatGPTPlaywright(LLMBackend):
                     last_error = exc
                     time.sleep(1.0)
             if self.browser is None:
-                raise RuntimeError(
-                    "Microsoft EdgeへのCDP接続に失敗しました。"
-                ) from last_error
+                message = "Microsoft EdgeへのCDP接続に失敗しました。"
+                if self.use_real_edge_profile:
+                    message += (
+                        "Edgeが既に起動している場合は、すべてのウィンドウを閉じて"
+                        "（タスクマネージャーで msedge.exe が残っていない状態にして）"
+                        "から再実行してください。"
+                    )
+                raise RuntimeError(message) from last_error
         if self.browser.contexts:
             self.context = self.browser.contexts[0]
         else:
@@ -133,7 +164,19 @@ class ChatGPTPlaywright(LLMBackend):
             )
         except Exception:
             pass
-        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+        pages = self.context.pages
+        matched = next(
+            (p for p in pages if any(host in p.url for host in self.PAGE_HOSTS)),
+            None,
+        )
+        if matched is not None:
+            # サービスのタブ（ログイン途中のタブも含む）があればそれを使う
+            self.page = matched
+            return
+        if pages and not self.use_real_edge_profile:
+            self.page = pages[0]
+        else:
+            self.page = self.context.new_page()
         if not self.page.url.startswith(self.chatgpt_url):
             try:
                 self.page.goto(self.chatgpt_url, wait_until="domcontentloaded", timeout=60_000)
@@ -312,7 +355,8 @@ class ChatGPTPlaywright(LLMBackend):
                 pass
             self.browser = None
         self.context = None
-        if self.edge_process is not None:
+        # 実プロファイルモードでは普段使いのEdgeを巻き込まないよう終了しない
+        if self.edge_process is not None and not self.use_real_edge_profile:
             try:
                 if self.edge_process.poll() is None:
                     self.edge_process.terminate()
@@ -322,6 +366,8 @@ class ChatGPTPlaywright(LLMBackend):
                         self.edge_process.kill()
             except Exception:
                 pass
+            self.edge_process = None
+        elif self.use_real_edge_profile:
             self.edge_process = None
         if self.playwright is not None:
             try:
