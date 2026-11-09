@@ -22,13 +22,16 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+echo [INFO] Playwright用のEdgeブラウザファイルを取得しています...
+".venv\Scripts\python.exe" -m playwright install msedge
+if errorlevel 1 (
+    echo [ERROR] Playwrightブラウザファイルの取得に失敗しました。
+    echo [INFO] 手動で次のコマンドを実行してください: python -m playwright install msedge
+    pause
+    exit /b 1
+)
 echo.
 echo [INFO] セットアップが完了しました。
-echo.
-echo [INFO] 初回のみ、以下のコマンドでEdgeの起動に必要なPlaywrightファイルを取得してください。
-echo python -m playwright install msedge
-REM 初回のみ実行してください。初回は Microsoft Edge のブラウザ起動に必要なファイルを取得します。
-REM python -m playwright install msedge
 echo.
 pause
 endlocal

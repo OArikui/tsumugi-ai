@@ -23,7 +23,7 @@ PowerShellでプロジェクトフォルダに移動し、以下を実行しま�
 .\setup.bat
 ```
 
-初回のみ、以下のコマンドでEdgeの起動に必要なPlaywrightファイルを取得してください。
+`setup.bat` が、Edgeの起動に必要なPlaywrightファイルの取得（`python -m playwright install msedge`）まで自動で行います。取得に失敗したときだけ、手動で次のコマンドを実行してください。
 
 ```powershell
 python -m playwright install msedge
@@ -70,4 +70,5 @@ LLMの差し替えは、`app/llm_base.py`の`LLMBackend`を継承して新しい
 
 ## バージョン
 
+- v0.1.1 — setup.bat で `playwright install msedge` を自動実行するように修正
 - v0.1.0 — Phase 1: テキスト入力 → ChatGPT Web (Playwright) → VOICEVOX 読み上げ
