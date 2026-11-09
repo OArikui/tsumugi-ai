@@ -47,7 +47,8 @@ python -m playwright install msedge
 
 - `voicevox_url`: VOICEVOXのURL
 - `speaker`: VOICEVOXのスピーカーID（春日部つむぎ = 8）
-- `browser_profile_dir`: Playwright専用のEdgeプロファイルディレクトリ（プロジェクト直下の `./browser_profile`）
+- `browser_profile_dir`: 専用Edgeのプロファイルディレクトリ（プロジェクト直下の `./browser_profile`）
+- `cdp_port`: EdgeへのCDP接続ポート（既定値 9222）
 - `chatgpt_url`: ChatGPTのURL
 - `system_prompt`: 春日部つむぎとしての応答指示
 
@@ -70,6 +71,7 @@ LLMの差し替えは、`app/llm_base.py`の`LLMBackend`を継承して新しい
 
 ## バージョン
 
+- v0.2.0 — Edge の起動方式を CDP 接続に変更。Edge を通常プロセスとして起動し、Playwright が後から接続する方式にしたことで、Cloudflare の人間確認がループする問題への対策を強化
 - v0.1.2 — Cloudflare の人間確認がループする対策として、Edge 起動時に自動操作フラグ（`--enable-automation` / `navigator.webdriver`）を抑えるよう修正
 - v0.1.1 — setup.bat で `playwright install msedge` を自動実行するように修正
 - v0.1.0 — Phase 1: テキスト入力 → ChatGPT Web (Playwright) → VOICEVOX 読み上げ
