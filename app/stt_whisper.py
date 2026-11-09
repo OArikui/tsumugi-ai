@@ -213,7 +213,8 @@ class SpeechToText:
 
         if stream is not None:
             try:
-                stream.stop()
+                if stream.active:
+                    stream.stop()
             finally:
                 stream.close()
 
