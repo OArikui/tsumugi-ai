@@ -579,7 +579,10 @@ class Live2DViewer:
             mouth_value = 0.0
 
         with self._mouth_lock:
-            self._mouth_open = max(0.0, min(1.0, mouth_value))
+            clamped_value = max(0.0, min(1.0, mouth_value))
+            if abs(clamped_value - self._mouth_open) >= 0.02:
+                self._last_mouth_activity = time.monotonic()
+            self._mouth_open = clamped_value
 
     def _get_mouth_open(self) -> float:
         """描画スレッド用に口の開き具合を取得する。"""
