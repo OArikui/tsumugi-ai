@@ -2,7 +2,7 @@
 
 Gemini / ChatGPT WebとVOICEVOXを連携させたデスクトップ音声対話アプリケーションです。通常はPySide6 GUIを使用し、config.yaml の gui_enabled を false にすると従来のCLIモードで起動します。使用するLLMは llm_backend で切り替えます。
 
-v0.7.0ではLLMの感情タグに応じた表情、長時間待機時の自然な休憩動作、実行ごとのログファイル出力に対応しました。
+v0.8.0ではPySide6 GUIを追加し、Live2D・会話表示・入力・状態表示を1つのウィンドウに統合しました。v0.7.0の感情表現と自然な休憩動作も維持しています。
 
 ## 必要環境
 
@@ -202,6 +202,7 @@ log_dir: "logs"
 | live2d_expressions | 感情ごとの表情名。nullはnormal | 下記の例 |
 | log_to_file | 実行ごとのログファイルを出力するか | true |
 | log_dir | ログの保存先（相対パスはプロジェクトルート基準） | logs |
+| gui_enabled | GUIを使用するか。falseなら従来のCLIモード | true |
 
 設定キーがconfig.yamlに存在しない場合は、main.py側の既定値を使用します。
 
