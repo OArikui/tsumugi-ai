@@ -212,6 +212,7 @@ class Live2DWidget(QOpenGLWidget):
             self._gl.glClearColor(0.10, 0.12, 0.16, 1.0)
             self._gl.glClear(self._gl.GL_COLOR_BUFFER_BIT)
         painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#1A202A"))
         painter.setPen(QColor("#D7DEE8"))
         painter.drawText(
             self.rect().adjusted(24, 24, -24, -24),
