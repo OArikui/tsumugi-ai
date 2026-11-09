@@ -1,6 +1,7 @@
 import io
 import logging
 import re
+import threading
 import time
 import wave
 from typing import Any, Callable
@@ -27,6 +28,7 @@ class VoiceVoxTTS:
         rms_callback: RMSCallback | None = None,
         split_by_sentence: bool = False,
         playback_callback: PlaybackCallback | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         self.voicevox_url = voicevox_url.rstrip("/")
         self.speaker = speaker
@@ -35,6 +37,7 @@ class VoiceVoxTTS:
         self.rms_callback = rms_callback
         self.split_by_sentence = split_by_sentence
         self.playback_callback = playback_callback
+        self.stop_event = stop_event
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "KasukabeTsumugiAI/1.0"})
 
@@ -129,6 +132,9 @@ class VoiceVoxTTS:
 
         def callback(outdata, frames, time_info, status):
             nonlocal position, last_playback_notice
+            if self.stop_event is not None and self.stop_event.is_set():
+                outdata.fill(0)
+                raise sd.CallbackStop
             if status:
                 logger.debug("音声再生状態: %s", status)
             total = len(audio)
@@ -170,10 +176,15 @@ class VoiceVoxTTS:
                 callback=callback,
             ):
                 while position < len(audio):
+                    if self.stop_event is not None and self.stop_event.is_set():
+                        break
                     time.sleep(0.05)
         except sd.PortAudioError as exc:
             raise RuntimeError("音声を再生できません。Windowsの出力デバイスやサウンド設定を確認してください。") from exc
-        if self.playback_callback is not None:
+        if (
+            self.playback_callback is not None
+            and (self.stop_event is None or not self.stop_event.is_set())
+        ):
             try:
                 self.playback_callback(1.0, 0.0)
             except Exception:
@@ -186,6 +197,8 @@ class VoiceVoxTTS:
         合成待ちの間が空いてしまうため）。
         split_by_sentence が True の場合は従来通り文単位で処理する。
         """
+        if self.stop_event is not None and self.stop_event.is_set():
+            return
         if self.split_by_sentence:
             sentences = self.split_sentences(text)
             if not sentences:
@@ -193,6 +206,8 @@ class VoiceVoxTTS:
                 return
             total = len(sentences)
             for index, sentence in enumerate(sentences, start=1):
+                if self.stop_event is not None and self.stop_event.is_set():
+                    return
                 logger.info("音声合成中 (%d/%d): %s", index, total, sentence)
                 query = self._create_audio_query(sentence)
                 wav_data = self._synthesize(query)
