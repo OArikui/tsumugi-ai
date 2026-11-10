@@ -86,8 +86,154 @@ class Live2DViewer:
     }
     NATURAL_IDLE_THRESHOLD = 20.0
     REST_EYE_CLOSE_SECONDS = 1.0
-    REST_EYE_HOLD_SECONDS = 2.5
+    REST_EYE_HOLD_SECONDS = 3.0
     REST_EYE_OPEN_SECONDS = 1.0
+    REST_EYE_OPEN_INTERVAL_MIN_SECONDS = 18.0
+    REST_EYE_OPEN_INTERVAL_MAX_SECONDS = 28.0
+    REST_EYE_OPEN_HOLD_VARIANCE_SECONDS = 1.0
+
+    POSE_FIELDS = (
+        "angle_x",
+        "angle_y",
+        "angle_z",
+        "body_angle_x",
+        "body_angle_z",
+        "eye_ball_x",
+        "eye_ball_y",
+    )
+    POSE_BLEND_SECONDS = 0.48
+    BREATHING_SWAY_SCALE = 0.10
+    GAZE_HEAD_COUPLING_X = 3.0
+    GAZE_HEAD_COUPLING_Y = 2.4
+    POSE_INTERVALS = {
+        "idle": (2.8, 5.2),
+        "thinking": (2.0, 3.8),
+        "synthesizing": (2.4, 4.2),
+        "speaking": (1.5, 3.0),
+        "listening": (3.0, 5.0),
+    }
+    POSE_SETS = {
+        "idle": (
+            ("idle:front", {
+                "angle_x": 0.0, "angle_y": 0.0, "angle_z": 0.0,
+                "body_angle_x": 0.0, "body_angle_z": 0.0,
+                "eye_ball_x": 0.0, "eye_ball_y": 0.0,
+            }),
+            ("idle:look_left", {
+                "angle_x": -7.0, "angle_y": 0.0, "angle_z": -1.0,
+                "body_angle_x": -0.3, "body_angle_z": -0.8,
+                "eye_ball_x": -0.70, "eye_ball_y": 0.02,
+            }),
+            ("idle:look_right", {
+                "angle_x": 7.0, "angle_y": 0.0, "angle_z": 1.0,
+                "body_angle_x": 0.3, "body_angle_z": 0.8,
+                "eye_ball_x": 0.70, "eye_ball_y": 0.02,
+            }),
+            ("idle:look_down", {
+                "angle_x": 0.0, "angle_y": -4.0, "angle_z": 0.8,
+                "body_angle_x": 0.4, "body_angle_z": 0.5,
+                "eye_ball_x": 0.05, "eye_ball_y": -0.48,
+            }),
+            ("idle:tilt_left", {
+                "angle_x": -2.5, "angle_y": 1.0, "angle_z": -6.0,
+                "body_angle_x": -0.6, "body_angle_z": -1.6,
+                "eye_ball_x": -0.28, "eye_ball_y": 0.12,
+            }),
+            ("idle:tilt_right", {
+                "angle_x": 2.5, "angle_y": 1.0, "angle_z": 6.0,
+                "body_angle_x": 0.6, "body_angle_z": 1.6,
+                "eye_ball_x": 0.28, "eye_ball_y": 0.12,
+            }),
+        ),
+        "thinking": (
+            ("thinking:look_up", {
+                "angle_x": 0.0, "angle_y": 5.0, "angle_z": 0.0,
+                "body_angle_x": 0.8, "body_angle_z": 0.0,
+                "eye_ball_x": 0.04, "eye_ball_y": 0.55,
+            }),
+            ("thinking:upper_left", {
+                "angle_x": -5.0, "angle_y": 4.5, "angle_z": -4.0,
+                "body_angle_x": 0.6, "body_angle_z": -1.0,
+                "eye_ball_x": -0.52, "eye_ball_y": 0.48,
+            }),
+            ("thinking:upper_right", {
+                "angle_x": 5.0, "angle_y": 4.5, "angle_z": 4.0,
+                "body_angle_x": 0.6, "body_angle_z": 1.0,
+                "eye_ball_x": 0.52, "eye_ball_y": 0.48,
+            }),
+            ("thinking:reflect", {
+                "angle_x": 6.0, "angle_y": 2.5, "angle_z": 5.0,
+                "body_angle_x": 0.4, "body_angle_z": 1.2,
+                "eye_ball_x": 0.42, "eye_ball_y": 0.30,
+            }),
+        ),
+        "synthesizing": (
+            ("synthesizing:focus", {
+                "angle_x": 0.0, "angle_y": 0.5, "angle_z": 0.0,
+                "body_angle_x": 0.0, "body_angle_z": 0.0,
+                "eye_ball_x": 0.04, "eye_ball_y": 0.08,
+            }),
+            ("synthesizing:glance_left", {
+                "angle_x": -4.5, "angle_y": 1.0, "angle_z": -1.5,
+                "body_angle_x": -0.2, "body_angle_z": -0.5,
+                "eye_ball_x": -0.48, "eye_ball_y": 0.08,
+            }),
+            ("synthesizing:glance_right", {
+                "angle_x": 4.5, "angle_y": 1.0, "angle_z": 1.5,
+                "body_angle_x": 0.2, "body_angle_z": 0.5,
+                "eye_ball_x": 0.48, "eye_ball_y": 0.08,
+            }),
+            ("synthesizing:inspect", {
+                "angle_x": -1.5, "angle_y": -2.5, "angle_z": -2.0,
+                "body_angle_x": -0.4, "body_angle_z": -0.8,
+                "eye_ball_x": -0.18, "eye_ball_y": -0.32,
+            }),
+        ),
+        "speaking": (
+            ("speaking:lean_forward", {
+                "angle_x": 1.2, "angle_y": -3.8, "angle_z": 0.0,
+                "body_angle_x": 1.2, "body_angle_z": 0.0,
+                "eye_ball_x": 0.02, "eye_ball_y": -0.14,
+            }),
+            ("speaking:turn_left", {
+                "angle_x": -3.8, "angle_y": -2.5, "angle_z": -1.8,
+                "body_angle_x": 0.6, "body_angle_z": -0.8,
+                "eye_ball_x": -0.27, "eye_ball_y": -0.10,
+            }),
+            ("speaking:turn_right", {
+                "angle_x": 3.8, "angle_y": -2.5, "angle_z": 1.8,
+                "body_angle_x": 0.6, "body_angle_z": 0.8,
+                "eye_ball_x": 0.27, "eye_ball_y": -0.10,
+            }),
+            ("speaking:gentle_tilt", {
+                "angle_x": -1.8, "angle_y": -2.0, "angle_z": -3.0,
+                "body_angle_x": 0.5, "body_angle_z": -0.8,
+                "eye_ball_x": -0.14, "eye_ball_y": -0.08,
+            }),
+        ),
+        "listening": (
+            ("listening:attentive", {
+                "angle_x": 0.0, "angle_y": 1.0, "angle_z": 0.0,
+                "body_angle_x": 0.0, "body_angle_z": 0.0,
+                "eye_ball_x": 0.0, "eye_ball_y": 0.06,
+            }),
+            ("listening:small_nod", {
+                "angle_x": 0.0, "angle_y": -1.8, "angle_z": 0.0,
+                "body_angle_x": -0.8, "body_angle_z": 0.0,
+                "eye_ball_x": 0.02, "eye_ball_y": -0.08,
+            }),
+            ("listening:glance_left", {
+                "angle_x": -2.0, "angle_y": 0.5, "angle_z": -0.8,
+                "body_angle_x": 0.0, "body_angle_z": -0.3,
+                "eye_ball_x": -0.22, "eye_ball_y": 0.04,
+            }),
+            ("listening:glance_right", {
+                "angle_x": 2.0, "angle_y": 0.5, "angle_z": 0.8,
+                "body_angle_x": 0.0, "body_angle_z": 0.3,
+                "eye_ball_x": 0.22, "eye_ball_y": 0.04,
+            }),
+        ),
+    }
 
     def __init__(
         self,
@@ -144,6 +290,11 @@ class Live2DViewer:
         self._gaze_current_y = 0.0
         self._next_gaze_change = 0.0
         self._last_motion_update = 0.0
+        self._pose_state: str | None = None
+        self._pose_name: str | None = None
+        self._pose_target = {field: 0.0 for field in self.POSE_FIELDS}
+        self._pose_current = {field: 0.0 for field in self.POSE_FIELDS}
+        self._pose_next_change = 0.0
 
         self._mouth_open = 0.0
         self._last_mouth_activity = time.monotonic()
@@ -159,6 +310,13 @@ class Live2DViewer:
         self._core_dll_handle: Any | None = None
         self._idle_motion_count = 0
         self._expression_names: set[str] = set()
+
+        self._rest_active = False
+        self._rest_started_at: float | None = None
+        self._rest_initial_close_started_at: float | None = None
+        self._rest_next_open_time: float | None = None
+        self._rest_open_started_at: float | None = None
+        self._rest_open_hold_duration = self.REST_EYE_HOLD_SECONDS
 
 
     ACTIVITY_STATES = {"idle", "thinking", "synthesizing", "speaking", "listening"}
@@ -184,56 +342,158 @@ class Live2DViewer:
         rest_gaze_phase: float,
     ) -> dict[str, float]:
         """全モーションを合成し、パラメータごとの加算値を1つだけ返す。"""
+        if not self.motion_enabled:
+            return self._compose_legacy_motion_offsets(
+                now, initial_time, activity, mouth_open,
+                resting, rest_elapsed, rest_gaze_phase,
+            )
+        return self._compose_pose_offsets(
+            now, initial_time, activity, mouth_open,
+        )
+
+    def _compose_pose_offsets(
+        self,
+        now: float,
+        initial_time: float,
+        activity: str,
+        mouth_open: float,
+    ) -> dict[str, float]:
+        """状態ごとのポーズ目標を選択し、指数ブレンドで滑らかに追従させる。"""
+        state = activity if activity in self.ACTIVITY_STATES else "idle"
+        elapsed = now - initial_time
+        with self._activity_lock:
+            state = self._activity_state
+            if state not in self.ACTIVITY_STATES:
+                state = "idle"
+            speaking = state == "speaking"
+
+            if self._pose_state != state or now >= self._pose_next_change:
+                candidates = self.POSE_SETS.get(state, self.POSE_SETS["idle"])
+                available = [
+                    candidate for candidate in candidates
+                    if candidate[0] != self._pose_name
+                ]
+                pose_name, pose = random.choice(available or candidates)
+                speaking_scale = (
+                    self.speaking_motion_scale if state == "speaking" else 1.0
+                )
+                target = {
+                    field: float(pose.get(field, 0.0)) * speaking_scale
+                    for field in self.POSE_FIELDS
+                }
+                # 視線と頭の向きを同じ目標から作り、別々の追従処理が競合しないようにする。
+                target["eye_ball_x"] = max(
+                    -0.7, min(0.7, target["eye_ball_x"])
+                )
+                target["eye_ball_y"] = max(
+                    -0.7, min(0.7, target["eye_ball_y"])
+                )
+                target["angle_x"] += (
+                    target["eye_ball_x"] * self.GAZE_HEAD_COUPLING_X
+                )
+                target["angle_y"] += (
+                    target["eye_ball_y"] * self.GAZE_HEAD_COUPLING_Y
+                )
+                self._pose_target = target
+                self._pose_name = pose_name
+                self._pose_state = state
+                interval = self.POSE_INTERVALS.get(state, (2.8, 5.2))
+                self._pose_next_change = now + random.uniform(*interval)
+
+            dt = (
+                max(0.0, min(now - self._last_motion_update, 0.1))
+                if self._last_motion_update else 1.0 / 60.0
+            )
+            self._last_motion_update = now
+            blend = 1.0 - math.exp(-dt / self.POSE_BLEND_SECONDS)
+            for field in self.POSE_FIELDS:
+                current = self._pose_current[field]
+                target = self._pose_target[field]
+                self._pose_current[field] = current + (target - current) * blend
+            pose_values = dict(self._pose_current)
+
+        offsets = pose_values
+        if self.idle_sway:
+            # 既存の周期揺れは呼吸に合わせた小さな微振動としてのみ残す。
+            sway_scale = self.BREATHING_SWAY_SCALE * (
+                self.speaking_motion_scale if speaking else 1.0
+            )
+            for role, (_, amplitude, period, phase) in self.SWAY_PARAMETERS.items():
+                offsets[role] += amplitude * sway_scale * math.sin(
+                    elapsed * 2.0 * math.pi / period + phase
+                )
+
+        if speaking:
+            # v0.11.0 の声量連動うなずきは維持する。
+            pulse = math.sin(elapsed * 5.8)
+            scale = self.speaking_motion_scale
+            offsets["angle_y"] += (
+                scale * mouth_open * (2.6 + 1.2 * pulse)
+            )
+            offsets["angle_x"] += (
+                scale * mouth_open * 0.9 * math.sin(elapsed * 3.0)
+            )
+            offsets["body_angle_x"] += (
+                scale * mouth_open * 1.5 * math.sin(elapsed * 4.2)
+            )
+            offsets["body_angle_z"] += (
+                scale * mouth_open * math.sin(elapsed * 2.6 + 0.8)
+            )
+        return offsets
+
+    def _compose_legacy_motion_offsets(
+        self,
+        now: float,
+        initial_time: float,
+        activity: str,
+        mouth_open: float,
+        resting: bool,
+        rest_elapsed: float,
+        rest_gaze_phase: float,
+    ) -> dict[str, float]:
+        """ポーズ遷移を無効にしたときのv0.11.0のサイン波モーション。"""
         elapsed = now - initial_time
         offsets: dict[str, float] = {}
-        speaking = activity == "speaking"
         if self.idle_sway:
-            scale = self.speaking_motion_scale if speaking and self.motion_enabled else 1.0
+            scale = self.speaking_motion_scale if speaking else 1.0
             for role, (_, amplitude, period, phase) in self.SWAY_PARAMETERS.items():
                 offsets[role] = amplitude * scale * math.sin(
                     elapsed * 2.0 * math.pi / period + phase
                 )
 
-        # falseならv0.10.0相当の待機揺れと休憩中視線のみ。
-        if not self.motion_enabled:
-            if resting:
-                offsets["eye_ball_x"] = 0.16 * math.sin(
-                    rest_elapsed * 2.0 * math.pi / 11.0 + rest_gaze_phase
-                )
-                offsets["eye_ball_y"] = 0.10 * math.sin(
-                    rest_elapsed * 2.0 * math.pi / 14.0 + rest_gaze_phase * 0.7
-                )
-                phase = rest_elapsed % 29.0
-                offsets["angle_x"] = (
-                    1.2 * math.sin(math.pi * phase / 7.0) if phase < 7.0 else 0.0
-                )
-            return offsets
-
         with self._activity_lock:
             state = self._activity_state
+            speaking = state == "speaking"
             if now >= self._next_gaze_change:
                 if state == "thinking":
-                    self._gaze_target_x = random.uniform(-0.42, 0.42)
-                    self._gaze_target_y = random.uniform(0.16, 0.42)
+                    self._gaze_target_x = random.uniform(-0.58, 0.58)
+                    self._gaze_target_y = random.uniform(0.20, 0.48)
                     delay = random.uniform(2.0, 3.8)
                 elif state == "synthesizing":
-                    self._gaze_target_x = random.uniform(-0.30, 0.30)
-                    self._gaze_target_y = random.uniform(-0.05, 0.28)
+                    self._gaze_target_x = random.uniform(-0.48, 0.48)
+                    self._gaze_target_y = random.uniform(-0.08, 0.30)
                     delay = random.uniform(2.4, 4.2)
                 elif state == "listening":
-                    self._gaze_target_x = random.uniform(-0.20, 0.20)
-                    self._gaze_target_y = random.uniform(-0.12, 0.12)
+                    self._gaze_target_x = random.uniform(-0.30, 0.30)
+                    self._gaze_target_y = random.uniform(-0.14, 0.14)
                     delay = random.uniform(3.0, 5.0)
                 else:
-                    self._gaze_target_x = random.uniform(-0.48, 0.48)
-                    self._gaze_target_y = random.uniform(-0.24, 0.24)
+                    self._gaze_target_x = random.uniform(-0.70, 0.70)
+                    self._gaze_target_y = random.uniform(-0.30, 0.30)
                     delay = random.uniform(2.8, 5.2)
                 self._next_gaze_change = now + delay
-            dt = max(0.0, min(now - self._last_motion_update, 0.1)) if self._last_motion_update else 1.0 / 60.0
+            dt = (
+                max(0.0, min(now - self._last_motion_update, 0.1))
+                if self._last_motion_update else 1.0 / 60.0
+            )
             self._last_motion_update = now
             blend = 1.0 - math.exp(-dt / 0.38)
-            self._gaze_current_x += (self._gaze_target_x - self._gaze_current_x) * blend
-            self._gaze_current_y += (self._gaze_target_y - self._gaze_current_y) * blend
+            self._gaze_current_x += (
+                self._gaze_target_x - self._gaze_current_x
+            ) * blend
+            self._gaze_current_y += (
+                self._gaze_target_y - self._gaze_current_y
+            ) * blend
             gaze_x, gaze_y = self._gaze_current_x, self._gaze_current_y
 
         if state == "speaking":
@@ -256,9 +516,97 @@ class Live2DViewer:
         elif resting:
             offsets["angle_x"] = offsets.get("angle_x", 0.0) + 1.2 * math.sin(elapsed * 0.20)
 
-        offsets["eye_ball_x"] = offsets.get("eye_ball_x", 0.0) + gaze_x
-        offsets["eye_ball_y"] = offsets.get("eye_ball_y", 0.0) + gaze_y
+        # 旧モードでも視線の移動に頭を少し追従させる。
+        offsets["angle_x"] = offsets.get("angle_x", 0.0) + gaze_x * self.GAZE_HEAD_COUPLING_X
+        offsets["angle_y"] = offsets.get("angle_y", 0.0) + gaze_y * self.GAZE_HEAD_COUPLING_Y
+        offsets["eye_ball_x"] = gaze_x
+        offsets["eye_ball_y"] = gaze_y
         return offsets
+
+    def update_rest_eye_open(
+        self,
+        now: float,
+        resting: bool,
+    ) -> tuple[float, float]:
+        """休憩中は閉眼を既定とし、18〜28秒ごとに短時間だけ開眼する。"""
+        if not resting:
+            if self._rest_active:
+                logger.info("Live2Dが通常の待機状態に戻りました。")
+            self._rest_active = False
+            self._rest_started_at = None
+            self._rest_initial_close_started_at = None
+            self._rest_next_open_time = None
+            self._rest_open_started_at = None
+            self._rest_open_hold_duration = self.REST_EYE_HOLD_SECONDS
+            return 1.0, 0.0
+
+        if not self._rest_active:
+            self._rest_active = True
+            self._rest_started_at = now
+            self._rest_initial_close_started_at = now
+            self._rest_next_open_time = (
+                now + random.uniform(
+                    self.REST_EYE_OPEN_INTERVAL_MIN_SECONDS,
+                    self.REST_EYE_OPEN_INTERVAL_MAX_SECONDS,
+                )
+            )
+            self._rest_open_started_at = None
+            logger.info("Live2Dが自然な休憩状態に入りました。")
+
+        rest_started_at = self._rest_started_at if self._rest_started_at is not None else now
+        rest_elapsed = max(0.0, now - rest_started_at)
+
+        if self._rest_initial_close_started_at is not None:
+            close_elapsed = now - self._rest_initial_close_started_at
+            close_duration = max(0.001, self.REST_EYE_CLOSE_SECONDS)
+            if close_elapsed < close_duration:
+                return max(0.0, 1.0 - close_elapsed / close_duration), rest_elapsed
+            self._rest_initial_close_started_at = None
+
+        if (
+            self._rest_open_started_at is None
+            and self._rest_next_open_time is not None
+            and now >= self._rest_next_open_time
+        ):
+            self._rest_open_started_at = now
+            self._rest_open_hold_duration = max(
+                2.0,
+                min(
+                    4.0,
+                    self.REST_EYE_HOLD_SECONDS
+                    + random.uniform(
+                        -self.REST_EYE_OPEN_HOLD_VARIANCE_SECONDS,
+                        self.REST_EYE_OPEN_HOLD_VARIANCE_SECONDS,
+                    ),
+                ),
+            )
+
+        if self._rest_open_started_at is None:
+            return 0.0, rest_elapsed
+
+        open_elapsed = now - self._rest_open_started_at
+        open_ramp = max(0.001, self.REST_EYE_OPEN_SECONDS)
+        close_ramp = max(0.001, self.REST_EYE_CLOSE_SECONDS)
+        hold_end = open_ramp + self._rest_open_hold_duration
+        close_end = hold_end + close_ramp
+
+        if open_elapsed < open_ramp:
+            eye_open = open_elapsed / open_ramp
+        elif open_elapsed < hold_end:
+            eye_open = 1.0
+        elif open_elapsed < close_end:
+            eye_open = 1.0 - (open_elapsed - hold_end) / close_ramp
+        else:
+            self._rest_open_started_at = None
+            self._rest_next_open_time = (
+                now + random.uniform(
+                    self.REST_EYE_OPEN_INTERVAL_MIN_SECONDS,
+                    self.REST_EYE_OPEN_INTERVAL_MAX_SECONDS,
+                )
+            )
+            eye_open = 0.0
+
+        return max(0.0, min(1.0, eye_open)), rest_elapsed
 
     def _check_cancelled(self) -> None:
         """起動キャンセル要求を確認する。"""
@@ -496,20 +844,23 @@ class Live2DViewer:
                 )
 
         resolved_sway: dict[str, str] = {}
-        if self.idle_sway:
-            for role, (candidates, amplitude, period, phase) in self.SWAY_PARAMETERS.items():
-                parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
-                if parameter_id is not None:
-                    resolved_sway[role] = parameter_id
+        for role, (candidates, amplitude, period, phase) in self.SWAY_PARAMETERS.items():
+            parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
+            if parameter_id is not None:
+                resolved_sway[role] = parameter_id
+                if self.idle_sway:
                     logger.info(
-                        "Live2D待機揺れパラメータを解決しました: %s = %s "
-                        "(振幅=%.1f, 周期=%.1f秒)",
-                        role, parameter_id, amplitude, period,
+                        "Live2D待機揺れ・ポーズ用パラメータを解決しました: %s = %s "
+                        "(微振動振幅=%.2f, 周期=%.1f秒)",
+                        role,
+                        parameter_id,
+                        amplitude * self.BREATHING_SWAY_SCALE,
+                        period,
                     )
                 else:
-                    logger.debug("待機揺れパラメータ %s はモデルにありません。", role)
-        else:
-            logger.info("Live2Dの待機中の揺れは無効です。")
+                    logger.info("Live2Dポーズ用パラメータを解決しました: %s = %s", role, parameter_id)
+            else:
+                logger.debug("モーションパラメータ %s はモデルにありません。", role)
 
         resolved_face: dict[str, str] = {}
         for role, candidates in self.FACE_PARAMETER_CANDIDATES.items():
@@ -521,16 +872,13 @@ class Live2DViewer:
                 logger.debug("感情表現パラメータ %s はモデルにありません。", role)
 
         resolved_natural: dict[str, str] = {}
-        if self.natural_idle or self.motion_enabled:
-            for role, candidates in self.NATURAL_IDLE_PARAMETERS.items():
-                parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
-                if parameter_id is not None:
-                    resolved_natural[role] = parameter_id
-                    logger.info("自然な待機パラメータを解決しました: %s = %s", role, parameter_id)
-                else:
-                    logger.debug("自然な待機パラメータ %s はモデルにありません。", role)
-        else:
-            logger.info("自然な休憩状態は無効です。")
+        for role, candidates in self.NATURAL_IDLE_PARAMETERS.items():
+            parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
+            if parameter_id is not None:
+                resolved_natural[role] = parameter_id
+                logger.info("自然な待機・視線用パラメータを解決しました: %s = %s", role, parameter_id)
+            else:
+                logger.debug("自然な待機・視線パラメータ %s はモデルにありません。", role)
 
         return resolved, resolved_sway, resolved_face, resolved_natural
 
@@ -888,10 +1236,6 @@ class Live2DViewer:
             use_face_fallback = False
             active_face_preset: dict[str, float] = {}
 
-            rest_started_at: float | None = None
-            next_rest_close_time: float | None = None
-            rest_close_start_time: float | None = None
-            next_rest_close_delay = random.uniform(6.0, 12.0)
             rest_gaze_phase = random.uniform(0.0, math.tau)
 
             with self._state_lock:
@@ -956,46 +1300,10 @@ class Live2DViewer:
                     and now - last_mouth_activity >= self.NATURAL_IDLE_THRESHOLD
                 )
 
-                rest_eye_open = 1.0
-                rest_elapsed = 0.0
-                if resting:
-                    if rest_started_at is None:
-                        rest_started_at = now
-                        next_rest_close_time = now + next_rest_close_delay
-                        logger.info("Live2Dが自然な休憩状態に入りました。")
-
-                    rest_elapsed = now - rest_started_at
-                    if (
-                        rest_close_start_time is None
-                        and next_rest_close_time is not None
-                        and now >= next_rest_close_time
-                    ):
-                        rest_close_start_time = now
-
-                    if rest_close_start_time is not None:
-                        close_elapsed = now - rest_close_start_time
-                        close_end = self.REST_EYE_CLOSE_SECONDS
-                        hold_end = close_end + self.REST_EYE_HOLD_SECONDS
-                        open_end = hold_end + self.REST_EYE_OPEN_SECONDS
-
-                        if close_elapsed < close_end:
-                            rest_eye_open = 1.0 - close_elapsed / close_end
-                        elif close_elapsed < hold_end:
-                            rest_eye_open = 0.0
-                        elif close_elapsed < open_end:
-                            rest_eye_open = (
-                                close_elapsed - hold_end
-                            ) / self.REST_EYE_OPEN_SECONDS
-                        else:
-                            rest_close_start_time = None
-                            next_rest_close_time = now + random.uniform(18.0, 28.0)
-                            rest_eye_open = 1.0
-                else:
-                    if rest_started_at is not None:
-                        logger.info("Live2Dが通常の待機状態に戻りました。")
-                    rest_started_at = None
-                    next_rest_close_time = None
-                    rest_close_start_time = None
+                rest_eye_open, rest_elapsed = self.update_rest_eye_open(
+                    now,
+                    resting,
+                )
 
                 # 通常のまばたき。休憩中はゆっくりした閉眼動作を重ねる。
                 if blink_start_time is None and now >= next_blink_time:

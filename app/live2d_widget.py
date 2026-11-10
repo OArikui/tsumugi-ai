@@ -78,10 +78,6 @@ class Live2DWidget(QOpenGLWidget):
         self._last_expression_revision = -1
         self._use_face_fallback = False
         self._active_face_preset: dict[str, float] = {}
-        self._rest_started_at: float | None = None
-        self._next_rest_close_time: float | None = None
-        self._rest_close_start_time: float | None = None
-        self._next_rest_close_delay = random.uniform(6.0, 12.0)
         self._rest_gaze_phase = random.uniform(0.0, math.tau)
 
         self._timer = QTimer(self)
@@ -269,46 +265,10 @@ class Live2DWidget(QOpenGLWidget):
                 and now - last_mouth_activity
                 >= self._controller.NATURAL_IDLE_THRESHOLD
             )
-            rest_eye_open = 1.0
-            rest_elapsed = 0.0
-
-            if resting:
-                if self._rest_started_at is None:
-                    self._rest_started_at = now
-                    self._next_rest_close_time = now + self._next_rest_close_delay
-                    logger.info("Live2Dが自然な休憩状態に入りました。")
-                rest_elapsed = now - self._rest_started_at
-
-                if (
-                    self._rest_close_start_time is None
-                    and self._next_rest_close_time is not None
-                    and now >= self._next_rest_close_time
-                ):
-                    self._rest_close_start_time = now
-
-                if self._rest_close_start_time is not None:
-                    close_elapsed = now - self._rest_close_start_time
-                    close_end = self._controller.REST_EYE_CLOSE_SECONDS
-                    hold_end = close_end + self._controller.REST_EYE_HOLD_SECONDS
-                    open_end = hold_end + self._controller.REST_EYE_OPEN_SECONDS
-
-                    if close_elapsed < close_end:
-                        rest_eye_open = 1.0 - close_elapsed / close_end
-                    elif close_elapsed < hold_end:
-                        rest_eye_open = 0.0
-                    elif close_elapsed < open_end:
-                        rest_eye_open = (
-                            close_elapsed - hold_end
-                        ) / self._controller.REST_EYE_OPEN_SECONDS
-                    else:
-                        self._rest_close_start_time = None
-                        self._next_rest_close_time = now + random.uniform(18.0, 28.0)
-            else:
-                if self._rest_started_at is not None:
-                    logger.info("Live2Dが通常の待機状態に戻りました。")
-                self._rest_started_at = None
-                self._next_rest_close_time = None
-                self._rest_close_start_time = None
+            rest_eye_open, rest_elapsed = self._controller.update_rest_eye_open(
+                now,
+                resting,
+            )
 
             if self._blink_start_time is None and now >= self._next_blink_time:
                 self._blink_start_time = now
