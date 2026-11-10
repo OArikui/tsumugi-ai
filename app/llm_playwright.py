@@ -298,12 +298,18 @@ class ChatGPTPlaywright(LLMBackend):
         else:
             input_box.press("Enter")
 
-    def _wait_for_response(self, previous_count: int) -> str:
-        """返答生成が完了するまでテキストが安定するまで待つ。"""
+    def _wait_for_response(
+        self,
+        previous_count: int,
+        on_text_chunk: Callable[[str], None] | None = None,
+        on_stream_reset: Callable[[], None] | None = None,
+    ) -> str:
+        """返答をポーリングし、追記分だけを通知しながら完了を待つ。"""
         deadline = time.monotonic() + self.max_wait_seconds
         last_text = ""
         last_change = time.monotonic()
         response_started = False
+        streaming_active = on_text_chunk is not None
         while time.monotonic() < deadline:
             self._check_stop_requested()
             try:
@@ -317,6 +323,38 @@ class ChatGPTPlaywright(LLMBackend):
                 if count > previous_count and current_text:
                     response_started = True
                 if current_text != last_text:
+                    if streaming_active:
+                        if current_text.startswith(last_text):
+                            delta = current_text[len(last_text):]
+                            if delta:
+                                try:
+                                    on_text_chunk(delta)
+                                except Exception:
+                                    logger.exception(
+                                        "応答テキストのストリーミング通知に失敗しました。"
+                                    )
+                                    streaming_active = False
+                                    if on_stream_reset is not None:
+                                        try:
+                                            on_stream_reset()
+                                        except Exception:
+                                            logger.warning(
+                                                "先行合成の破棄に失敗しました。",
+                                                exc_info=True,
+                                            )
+                        elif last_text:
+                            logger.warning(
+                                "生成中の返答が既出テキストと矛盾したため、先行合成を中止します。"
+                            )
+                            streaming_active = False
+                            if on_stream_reset is not None:
+                                try:
+                                    on_stream_reset()
+                                except Exception:
+                                    logger.warning(
+                                        "先行合成の破棄に失敗しました。",
+                                        exc_info=True,
+                                    )
                     last_text = current_text
                     last_change = time.monotonic()
                 stop_visible = self._find_stop_button()
@@ -346,6 +384,23 @@ class ChatGPTPlaywright(LLMBackend):
 
     def chat(self, user_text: str) -> str:
         """ユーザーの文章を送信し、返答を取得する。"""
+        return self._chat_internal(user_text)
+
+    def chat_streaming(
+        self,
+        user_text: str,
+        on_text_chunk: Callable[[str], None],
+        on_stream_reset: Callable[[], None] | None = None,
+    ) -> str:
+        """Geminiで生成中の追記分を通知し、最後に全文を返す。"""
+        return self._chat_internal(user_text, on_text_chunk, on_stream_reset)
+
+    def _chat_internal(
+        self,
+        user_text: str,
+        on_text_chunk: Callable[[str], None] | None = None,
+        on_stream_reset: Callable[[], None] | None = None,
+    ) -> str:
         if not user_text.strip():
             raise ValueError("送信する文章が空です。")
         self._check_stop_requested()
@@ -365,8 +420,12 @@ class ChatGPTPlaywright(LLMBackend):
         previous_count = self._find_assistant_messages().count()
         logger.info("ChatGPTにメッセージを送信しています。")
         self._send_message(user_text)
-        response = self._wait_for_response(previous_count)
-        logger.info("ChatGPTの返答を取得しました。")
+        response = self._wait_for_response(
+            previous_count,
+            on_text_chunk=on_text_chunk,
+            on_stream_reset=on_stream_reset,
+        )
+        logger.info("LLMの返答を取得しました。")
         return response
 
     def close(self) -> None:

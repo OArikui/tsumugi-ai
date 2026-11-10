@@ -1,5 +1,6 @@
 import io
 import logging
+import queue
 import re
 import threading
 import time
@@ -40,6 +41,8 @@ class VoiceVoxTTS:
         self.stop_event = stop_event
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "KasukabeTsumugiAI/1.0"})
+        self._stream_lock = threading.Lock()
+        self._stream_sessions: set["VoiceVoxStreamingSession"] = set()
 
     @staticmethod
     def split_sentences(text: str) -> list[str]:
@@ -52,6 +55,8 @@ class VoiceVoxTTS:
 
     def _create_audio_query(self, sentence: str, timeout: float | None = None) -> dict[str, Any]:
         """文章から音声合成用クエリを生成する。"""
+        if self.stop_event is not None and self.stop_event.is_set():
+            raise RuntimeError("音声合成は停止要求により中断されました。")
         try:
             response = self.session.post(
                 f"{self.voicevox_url}/audio_query",
@@ -68,6 +73,8 @@ class VoiceVoxTTS:
 
     def _synthesize(self, audio_query: dict[str, Any], timeout: float | None = None) -> bytes:
         """音声合成クエリからWAV音声を生成する。"""
+        if self.stop_event is not None and self.stop_event.is_set():
+            raise RuntimeError("音声合成は停止要求により中断されました。")
         try:
             response = self.session.post(
                 f"{self.voicevox_url}/synthesis",
@@ -121,6 +128,8 @@ class VoiceVoxTTS:
 
     def _play_audio(self, wav_data: bytes) -> None:
         """音声を再生する。"""
+        if self.stop_event is not None and self.stop_event.is_set():
+            return
         audio, sample_rate, channels = self._decode_wav(wav_data)
         audio = np.clip(audio * self.volume, -1.0, 1.0).astype(np.float32)
         # ステレオはフレーム単位に整形する（VOICEVOX出力は通常モノラル）
@@ -166,6 +175,12 @@ class VoiceVoxTTS:
                         self.playback_callback(position / total if total else 1.0, rms)
                     except Exception:
                         logger.warning("再生進捗コールバックの呼び出しに失敗しました。", exc_info=True)
+
+        if self.playback_callback is not None:
+            try:
+                self.playback_callback(0.0, 0.0)
+            except Exception:
+                logger.warning("再生開始コールバックの呼び出しに失敗しました。", exc_info=True)
 
         try:
             with sd.OutputStream(
@@ -228,7 +243,69 @@ class VoiceVoxTTS:
         self._play_audio(wav_data)
         logger.info("音声再生が完了しました。")
 
+    def start_streaming(self) -> VoiceVoxStreamingSession:
+        """生成中の文を先行合成するセッションを開始する。"""
+        if self.stop_event is not None and self.stop_event.is_set():
+            raise RuntimeError("音声合成は停止要求により中断されています。")
+        session = VoiceVoxStreamingSession(self)
+        with self._stream_lock:
+            self._stream_sessions.add(session)
+        return session
+
+    def _release_streaming_session(self, session: VoiceVoxStreamingSession) -> None:
+        with self._stream_lock:
+            self._stream_sessions.discard(session)
+
+    @staticmethod
+    def concatenate_wavs(wav_parts: list[bytes]) -> bytes | None:
+        """形式が一致するPCM WAVだけを無音追加なしで連結する。"""
+        if not wav_parts:
+            return None
+        frame_data: list[bytes] = []
+        expected: tuple[int, int, int] | None = None
+        try:
+            for wav_data in wav_parts:
+                with wave.open(io.BytesIO(wav_data), "rb") as source:
+                    current = (
+                        source.getframerate(),
+                        source.getnchannels(),
+                        source.getsampwidth(),
+                    )
+                    if expected is None:
+                        expected = current
+                    elif current != expected:
+                        logger.warning(
+                            "WAV形式が一致しないため文単位の再生に切り替えます。"
+                        )
+                        return None
+                    if source.getcomptype() != "NONE":
+                        logger.warning(
+                            "非PCM WAVのため文単位の再生に切り替えます。"
+                        )
+                        return None
+                    frame_data.append(source.readframes(source.getnframes()))
+            if expected is None:
+                return None
+            sample_rate, channels, sample_width = expected
+            output = io.BytesIO()
+            with wave.open(output, "wb") as target:
+                target.setnchannels(channels)
+                target.setsampwidth(sample_width)
+                target.setframerate(sample_rate)
+                target.writeframes(b"".join(frame_data))
+            return output.getvalue()
+        except (wave.Error, OSError, EOFError, ValueError):
+            logger.warning(
+                "WAV連結に失敗したため文単位の再生に切り替えます。",
+                exc_info=True,
+            )
+            return None
+
     def close(self) -> None:
+        with self._stream_lock:
+            sessions = list(self._stream_sessions)
+        for session in sessions:
+            session.cancel()
         self.session.close()
 
     def check_connection(self) -> None:
@@ -239,3 +316,232 @@ class VoiceVoxTTS:
             logger.info("VOICEVOXに接続しました。バージョン: %s", response.text.strip())
         except requests.RequestException as exc:
             raise RuntimeError("VOICEVOXに接続できません。VOICEVOXを起動してください。") from exc
+
+
+class VoiceVoxStreamingSession:
+    """Gemini生成中に確定した文を順次合成し、再生前にまとめる。"""
+
+    def __init__(self, tts: VoiceVoxTTS) -> None:
+        self._tts = tts
+        self._queue: queue.Queue[str | None] = queue.Queue()
+        self._lock = threading.Lock()
+        self._raw_text = ""
+        self._body_snapshot = ""
+        self._confirmed_count = 0
+        self._sentences: list[str] = []
+        self._wav_parts: list[bytes] = []
+        self._error: Exception | None = None
+        self._aborted = False
+        self._cancelled = False
+        self._completed = False
+        self._thread = threading.Thread(
+            target=self._synthesis_worker,
+            name="VOICEVOX-Streaming-Synthesis",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _is_stopped(self) -> bool:
+        return (
+            self._tts.stop_event is not None
+            and self._tts.stop_event.is_set()
+        )
+
+    def _is_cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def _extract_body(self) -> str | None:
+        """先頭の感情タグが閉じるまでは本文を公開しない。"""
+        leading = self._raw_text.lstrip()
+        folded = leading.casefold()
+        tag_prefix = "[emotion:"
+        if len(folded) < len(tag_prefix) and tag_prefix.startswith(folded):
+            return None
+        if folded.startswith(tag_prefix):
+            match = re.match(
+                r"^\s*\[emotion:[^\]\r\n]*\]\s*",
+                self._raw_text,
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                return None
+            return self._raw_text[match.end():]
+        return self._raw_text
+
+    def feed_text(self, chunk: str) -> None:
+        """LLMから届いた追記分を蓄積し、後続文字のある確定文だけをキューへ送る。"""
+        if not chunk or self._is_stopped():
+            return
+        with self._lock:
+            if self._cancelled or self._completed:
+                return
+            self._raw_text += chunk
+
+        body = self._extract_body()
+        if body is None:
+            return
+        body = re.sub(
+            r"\[emotion:[^\]\r\n]*\]",
+            "",
+            body,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(r"\s+", " ", body).strip()
+        if self._body_snapshot and not normalized.startswith(self._body_snapshot):
+            logger.warning(
+                "ストリーミング本文が以前の内容と矛盾したため、先行合成を破棄します。"
+            )
+            self.abort()
+            return
+        self._body_snapshot = normalized
+
+        parts = self._tts.split_sentences(normalized)
+        confirmed = parts[:-1] if len(parts) > 1 else []
+        while self._confirmed_count < len(confirmed):
+            sentence = confirmed[self._confirmed_count]
+            self._enqueue_sentence(sentence)
+            self._confirmed_count += 1
+
+    def _enqueue_sentence(self, sentence: str) -> None:
+        if not sentence or self._is_stopped():
+            return
+        with self._lock:
+            if self._cancelled or self._completed:
+                return
+            self._sentences.append(sentence)
+            self._queue.put(sentence)
+
+    def _synthesis_worker(self) -> None:
+        try:
+            while True:
+                sentence = self._queue.get()
+                try:
+                    if sentence is None:
+                        return
+                    if self._is_stopped() or self._is_cancelled():
+                        return
+                    query = self._tts._create_audio_query(sentence)
+                    if self._is_stopped() or self._is_cancelled():
+                        return
+                    wav_data = self._tts._synthesize(query)
+                    if self._is_stopped() or self._is_cancelled():
+                        return
+                    with self._lock:
+                        self._wav_parts.append(wav_data)
+                except Exception as exc:
+                    with self._lock:
+                        self._error = exc
+                        self._cancelled = True
+                    logger.warning(
+                        "先行音声合成に失敗しました。完了後の通常合成へ切り替えます: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    return
+                finally:
+                    self._queue.task_done()
+        finally:
+            self._tts._release_streaming_session(self)
+
+    def _wait_for_worker(self) -> bool:
+        while self._thread.is_alive():
+            if self._is_stopped():
+                self.cancel()
+                return False
+            self._thread.join(timeout=0.1)
+        return not self._is_stopped()
+
+    def _discard_queued(self) -> None:
+        while True:
+            try:
+                self._queue.get_nowait()
+                self._queue.task_done()
+            except queue.Empty:
+                break
+
+    def abort(self) -> None:
+        """LLM側で既出テキストの書き換えを検知した場合、先行合成を破棄する。"""
+        with self._lock:
+            if self._completed or self._aborted:
+                return
+            self._aborted = True
+            self._cancelled = True
+            self._discard_queued()
+            self._queue.put(None)
+
+    def cancel(self) -> None:
+        """停止・例外時に未処理の先行合成を破棄する。"""
+        with self._lock:
+            if self._completed or self._cancelled:
+                return
+            self._cancelled = True
+            self._discard_queued()
+            self._queue.put(None)
+
+    def finish(self, final_text: str) -> None:
+        """最後の文を合成し、全WAVを連結してから既存経路で再生する。"""
+        with self._lock:
+            if self._completed:
+                return
+        try:
+            if self._is_stopped():
+                self.cancel()
+                return
+
+            final_sentences = self._tts.split_sentences(final_text)
+            with self._lock:
+                queued_sentences = list(self._sentences)
+                was_aborted = self._aborted
+
+            if was_aborted:
+                if self._wait_for_worker() and final_text.strip():
+                    logger.info("返答が書き換わったため、全文を通常方式で合成します。")
+                    self._tts.speak(final_text)
+                return
+
+            if final_sentences[:len(queued_sentences)] != queued_sentences:
+                self.abort()
+                if self._wait_for_worker() and final_text.strip():
+                    logger.warning(
+                        "最終本文と先行合成済み文が一致しないため、全文を再合成します。"
+                    )
+                    self._tts.speak(final_text)
+                return
+
+            for sentence in final_sentences[len(queued_sentences):]:
+                self._enqueue_sentence(sentence)
+            self._queue.put(None)
+
+            if not self._wait_for_worker():
+                return
+
+            with self._lock:
+                error = self._error
+                wav_parts = list(self._wav_parts)
+
+            if error is not None or len(wav_parts) != len(final_sentences):
+                if final_text.strip() and not self._is_stopped():
+                    logger.warning("先行合成を完了できなかったため、全文を通常方式で合成します。")
+                    self._tts.speak(final_text)
+                return
+
+            if not wav_parts:
+                return
+
+            combined = self._tts.concatenate_wavs(wav_parts)
+            if combined is not None:
+                logger.info("先行合成した%d文のWAVを連結して再生します。", len(wav_parts))
+                if not self._is_stopped():
+                    self._tts._play_audio(combined)
+                return
+
+            logger.warning("WAVの形式不一致または連結失敗のため、文単位で連続再生します。")
+            for wav_data in wav_parts:
+                if self._is_stopped():
+                    break
+                self._tts._play_audio(wav_data)
+        finally:
+            with self._lock:
+                self._completed = True
+            self._tts._release_streaming_session(self)

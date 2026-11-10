@@ -4,6 +4,7 @@ speaker: 8
 
 # 音声合成
 tts_split_by_sentence: false
+tts_streaming_enabled: true
 
 # LLMバックエンド: gemini または chatgpt
 llm_backend: "gemini"

@@ -85,6 +85,7 @@ class ConversationWorker(QThread):
         parse_response: Callable[[str], tuple[str, str]],
         stop_event: threading.Event,
         parent=None,
+        streaming_enabled: bool = True,
     ) -> None:
         super().__init__(parent)
         self._llm = llm
@@ -95,6 +96,7 @@ class ConversationWorker(QThread):
         self._voicevox_connected = False
         self._parse_response = parse_response
         self._stop_event = stop_event
+        self._streaming_enabled = bool(streaming_enabled)
         self._queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
 
     def submit(self, text: str) -> None:
@@ -225,14 +227,32 @@ class ConversationWorker(QThread):
                     continue
 
                 text = payload
+                streaming_session = None
                 try:
                     self.status_changed.emit("考え中")
-                    response = self._llm.chat(text)
+                    use_streaming = (
+                        self._streaming_enabled
+                        and self._voicevox_connected
+                        and bool(getattr(self._llm, "supports_streaming", False))
+                    )
+                    if use_streaming:
+                        streaming_session = self._tts.start_streaming()
+                        response = self._llm.chat_streaming(
+                            text,
+                            streaming_session.feed_text,
+                            streaming_session.abort,
+                        )
+                    else:
+                        response = self._llm.chat(text)
                     if self._stop_event.is_set():
+                        if streaming_session is not None:
+                            streaming_session.cancel()
                         break
 
                     emotion, spoken_text = self._parse_response(response)
                     if not spoken_text:
+                        if streaming_session is not None:
+                            streaming_session.cancel()
                         self.error_occurred.emit(
                             "LLMから読み上げ可能な本文が返されませんでした。"
                         )
@@ -244,7 +264,10 @@ class ConversationWorker(QThread):
                     if self._voicevox_connected:
                         self.status_changed.emit("声を生成中")
                         try:
-                            self._tts.speak(spoken_text)
+                            if streaming_session is not None:
+                                streaming_session.finish(spoken_text)
+                            else:
+                                self._tts.speak(spoken_text)
                         except Exception as exc:
                             self._voicevox_connected = False
                             message = (
@@ -258,14 +281,20 @@ class ConversationWorker(QThread):
                             )
                             self.voicevox_connection_changed.emit(False, message)
                     else:
+                        if streaming_session is not None:
+                            streaming_session.cancel()
                         logger.info(
                             "VOICEVOX未接続のため、音声読み上げをスキップしました。"
                         )
                 except Exception as exc:
+                    if streaming_session is not None:
+                        streaming_session.cancel()
                     if not self._stop_event.is_set():
                         logger.exception("GUIの会話処理に失敗しました。")
                         self.error_occurred.emit(str(exc))
                 finally:
+                    if streaming_session is not None:
+                        streaming_session.cancel()
                     self._viewer.set_mouth_open(0.0)
                     self._viewer.set_emotion("normal")
                     self.turn_finished.emit()
@@ -451,6 +480,7 @@ class MainWindow(QMainWindow):
             parse_response,
             self._stop_event,
             self,
+            streaming_enabled=bool(config.get("tts_streaming_enabled", True)),
         )
         self._worker.status_changed.connect(self._set_status)
         self._worker.ready.connect(self._on_ready)
