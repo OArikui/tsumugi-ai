@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+import threading
 
 from datetime import datetime
 from pathlib import Path
@@ -348,6 +349,7 @@ def run_cli(config: dict) -> int:
     viewer: Live2DViewer | None = None
     stt: SpeechToText | None = None
     ui: ConsoleUI | None = None
+    stop_event = threading.Event()
 
     print()
     print("=" *  50)
@@ -363,11 +365,11 @@ def run_cli(config: dict) -> int:
         viewer = create_live2d_viewer(config)
 
         logger.info("VOICEVOXを確認しています。")
-        tts = create_tts(config, ui, viewer)
+        tts = create_tts(config, ui, viewer, stop_event=stop_event)
         tts.check_connection()
 
         logger.info("LLMを初期化しています。")
-        llm = create_llm(config)
+        llm = create_llm(config, stop_event=stop_event)
 
         logger.info("AIを起動しています。")
         with ui.processing("AIを起動しています"):
@@ -503,6 +505,7 @@ def run_cli(config: dict) -> int:
                         viewer.set_emotion("normal")
 
             except KeyboardInterrupt:
+                stop_event.set()
                 if streaming_session is not None:
                     streaming_session.cancel()
                 logger.info("処理を中断しました。")
@@ -544,6 +547,7 @@ def run_cli(config: dict) -> int:
         return 1
 
     finally:
+        stop_event.set()
         logger.info("リソースを解放しています。")
 
         if viewer is not None:

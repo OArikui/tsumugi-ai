@@ -42,7 +42,7 @@ class VoiceVoxTTS:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "KasukabeTsumugiAI/1.0"})
         self._stream_lock = threading.Lock()
-        self._stream_sessions: set[VoiceVoxStreamingSession] = set()
+        self._stream_sessions: set["VoiceVoxStreamingSession"] = set()
 
     @staticmethod
     def split_sentences(text: str) -> list[str]:
