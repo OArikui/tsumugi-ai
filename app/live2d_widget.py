@@ -109,7 +109,6 @@ class Live2DWidget(QOpenGLWidget):
     def set_activity_state(self, state: str) -> None:
         """GUIの会話状態を共有モーション制御へ通知する。"""
         self._controller.set_activity_state(state)
-        self.update()
 
     def set_activity(self, activity: str) -> None:
         """旧APIとの互換性を維持する。"""
