@@ -206,6 +206,7 @@ class ConversationWorker(QThread):
                         self.status_changed.emit("聞き取り中...")
                     except Exception as exc:
                         self._disable_stt(str(exc))
+                        self._viewer.set_activity_state("idle")
                         self.status_changed.emit("待機中")
                     continue
 
@@ -219,9 +220,11 @@ class ConversationWorker(QThread):
                         recognized_text = self._stt.stop_recording_and_transcribe()
                         if recognized_text:
                             self.transcript_ready.emit(recognized_text)
+                        self._viewer.set_activity_state("idle")
                         self.status_changed.emit("待機中")
                     except Exception as exc:
                         self._disable_stt(str(exc))
+                        self._viewer.set_activity_state("idle")
                         self.status_changed.emit("待機中")
                     continue
 

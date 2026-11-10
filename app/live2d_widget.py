@@ -263,10 +263,10 @@ class Live2DWidget(QOpenGLWidget):
             if mouth_id is not None:
                 self._model.SetParamById(mouth_id, mouth_open)
 
-            activity = self._controller.get_activity_state()
+            activity = self._get_activity()
             resting = (
                 self._controller.natural_idle
-                and activity == "idle"
+                and activity != "thinking"
                 and now - last_mouth_activity
                 >= self._controller.NATURAL_IDLE_THRESHOLD
             )

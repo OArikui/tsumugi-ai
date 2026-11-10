@@ -248,10 +248,11 @@ class Live2DViewer:
             offsets["angle_y"] = offsets.get("angle_y", 0.0) + 0.7 * math.sin(elapsed * 0.62)
         elif state == "speaking":
             pulse = math.sin(elapsed * 5.8)
-            offsets["angle_y"] = offsets.get("angle_y", 0.0) + mouth_open * (2.6 + 1.2 * pulse)
-            offsets["angle_x"] = offsets.get("angle_x", 0.0) + mouth_open * 0.9 * math.sin(elapsed * 3.0)
-            offsets["body_angle_x"] = offsets.get("body_angle_x", 0.0) + mouth_open * 1.5 * math.sin(elapsed * 4.2)
-            offsets["body_angle_z"] = offsets.get("body_angle_z", 0.0) + mouth_open * math.sin(elapsed * 2.6 + 0.8)
+            scale = self.speaking_motion_scale
+            offsets["angle_y"] = offsets.get("angle_y", 0.0) + scale * mouth_open * (2.6 + 1.2 * pulse)
+            offsets["angle_x"] = offsets.get("angle_x", 0.0) + scale * mouth_open * 0.9 * math.sin(elapsed * 3.0)
+            offsets["body_angle_x"] = offsets.get("body_angle_x", 0.0) + scale * mouth_open * 1.5 * math.sin(elapsed * 4.2)
+            offsets["body_angle_z"] = offsets.get("body_angle_z", 0.0) + scale * mouth_open * math.sin(elapsed * 2.6 + 0.8)
         elif resting:
             offsets["angle_x"] = offsets.get("angle_x", 0.0) + 1.2 * math.sin(elapsed * 0.20)
 
@@ -520,7 +521,7 @@ class Live2DViewer:
                 logger.debug("感情表現パラメータ %s はモデルにありません。", role)
 
         resolved_natural: dict[str, str] = {}
-        if self.natural_idle:
+        if self.natural_idle or self.motion_enabled:
             for role, candidates in self.NATURAL_IDLE_PARAMETERS.items():
                 parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
                 if parameter_id is not None:
