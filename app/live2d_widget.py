@@ -47,6 +47,8 @@ class Live2DWidget(QOpenGLWidget):
             idle_sway=bool(config.get("live2d_idle_sway", True)),
             expressions=config.get("live2d_expressions"),
             natural_idle=bool(config.get("live2d_natural_idle", True)),
+            motion_enabled=bool(config.get("live2d_motion_enabled", True)),
+            speaking_motion_scale=float(config.get("live2d_speaking_motion_scale", 2.0)),
         )
 
         self._model: Any | None = None
@@ -67,9 +69,6 @@ class Live2DWidget(QOpenGLWidget):
         self._resolved_sway: dict[str, str] = {}
         self._resolved_face: dict[str, str] = {}
         self._resolved_natural: dict[str, str] = {}
-
-        self._activity_lock = threading.Lock()
-        self._activity = "idle"
 
         now = time.monotonic()
         self._initial_time = now
@@ -107,15 +106,13 @@ class Live2DWidget(QOpenGLWidget):
         """表情名をスレッドセーフに受け取り、次の描画フレームで反映する。"""
         self._controller.set_expression(name)
 
-    def set_activity(self, activity: str) -> None:
-        """GUI状態に応じた簡単なアバター動作を設定する。"""
-        with self._activity_lock:
-            self._activity = activity
-        self.update()
+    def set_activity_state(self, state: str) -> None:
+        """GUIの会話状態を共有モーション制御へ通知する。"""
+        self._controller.set_activity_state(state)
 
-    def _get_activity(self) -> str:
-        with self._activity_lock:
-            return self._activity
+    def set_activity(self, activity: str) -> None:
+        """旧APIとの互換性を維持する。"""
+        self.set_activity_state(activity)
 
     def initializeGL(self) -> None:
         """Qtが用意したOpenGLコンテキスト内でCubismを初期化する。"""
@@ -265,10 +262,10 @@ class Live2DWidget(QOpenGLWidget):
             if mouth_id is not None:
                 self._model.SetParamById(mouth_id, mouth_open)
 
-            activity = self._get_activity()
+            activity = self._controller.get_activity_state()
             resting = (
                 self._controller.natural_idle
-                and activity != "thinking"
+                and activity == "idle"
                 and now - last_mouth_activity
                 >= self._controller.NATURAL_IDLE_THRESHOLD
             )
@@ -344,47 +341,14 @@ class Live2DWidget(QOpenGLWidget):
                 )
                 self._model.SetParamById(breath_id, breath_value)
 
-            if self._controller.idle_sway and self._resolved_sway:
-                elapsed = now - self._initial_time
-                for role, parameter_id in self._resolved_sway.items():
-                    _, amplitude, period, phase = (
-                        self._controller.SWAY_PARAMETERS[role]
-                    )
-                    sway_value = amplitude * math.sin(
-                        elapsed * 2.0 * math.pi / period + phase
-                    )
-                    self._model.AddParamById(parameter_id, sway_value)
-
-            if activity == "thinking":
-                gaze_y_id = self._resolved_natural.get("eye_ball_y")
-                if gaze_y_id is not None:
-                    self._model.AddParamById(gaze_y_id, 0.16)
-            elif resting:
-                gaze_x_id = self._resolved_natural.get("eye_ball_x")
-                if gaze_x_id is not None:
-                    gaze_x = 0.16 * math.sin(
-                        rest_elapsed * 2.0 * math.pi / 11.0
-                        + self._rest_gaze_phase
-                    )
-                    self._model.AddParamById(gaze_x_id, gaze_x)
-
-                gaze_y_id = self._resolved_natural.get("eye_ball_y")
-                if gaze_y_id is not None:
-                    gaze_y = 0.10 * math.sin(
-                        rest_elapsed * 2.0 * math.pi / 14.0
-                        + self._rest_gaze_phase * 0.7
-                    )
-                    self._model.AddParamById(gaze_y_id, gaze_y)
-
-                head_angle_id = self._resolved_natural.get("angle_x")
-                if head_angle_id is not None:
-                    turn_phase = rest_elapsed % 29.0
-                    head_turn = (
-                        1.2 * math.sin(math.pi * turn_phase / 7.0)
-                        if turn_phase < 7.0
-                        else 0.0
-                    )
-                    self._model.AddParamById(head_angle_id, head_turn)
+            motion_offsets = self._controller.compose_motion_offsets(
+                now, self._initial_time, activity, mouth_open,
+                resting, rest_elapsed, self._rest_gaze_phase,
+            )
+            for role, value in motion_offsets.items():
+                parameter_id = self._resolved_sway.get(role) or self._resolved_natural.get(role)
+                if parameter_id is not None:
+                    self._model.AddParamById(parameter_id, value)
 
             self._live2d.clearBuffer(0.10, 0.12, 0.16, 1.0)
             self._model.Draw()

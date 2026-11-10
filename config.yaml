@@ -54,6 +54,12 @@ live2d_idle_sway: true
 # 20秒以上口が動いていないときの自然な休憩状態
 live2d_natural_idle: true
 
+# 状態別の視線・頭・体モーション（falseでv0.10.0相当の動作）
+live2d_motion_enabled: true
+
+# 発話中の身体モーション倍率
+live2d_speaking_motion_scale: 2.0
+
 # 感情ごとの表情名。nullは通常表情へ戻す。
 live2d_expressions:
   normal: null

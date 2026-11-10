@@ -20,7 +20,7 @@ from app.stt_whisper import SpeechToText
 from app.tts_voicevox import VoiceVoxTTS
 
 
-APP_VERSION = "0.10.0"
+APP_VERSION = "0.11.0"
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +205,8 @@ def create_live2d_viewer(config: dict) -> Live2DViewer | None:
             idle_sway=bool(config.get("live2d_idle_sway", True)),
             expressions=config.get("live2d_expressions"),
             natural_idle=bool(config.get("live2d_natural_idle", True)),
+            motion_enabled=bool(config.get("live2d_motion_enabled", True)),
+            speaking_motion_scale=float(config.get("live2d_speaking_motion_scale", 2.0)),
         )
 
         if viewer.start():

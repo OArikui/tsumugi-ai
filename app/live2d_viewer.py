@@ -71,6 +71,9 @@ class Live2DViewer:
         "eye_ball_x": ("ParamEyeBallX", "PARAM_EYE_BALL_X"),
         "eye_ball_y": ("ParamEyeBallY", "PARAM_EYE_BALL_Y"),
         "angle_x": ("ParamAngleX", "PARAM_ANGLE_X"),
+        "angle_y": ("ParamAngleY", "PARAM_ANGLE_Y"),
+        "body_angle_x": ("ParamBodyAngleX", "PARAM_BODY_ANGLE_X"),
+        "body_angle_z": ("ParamBodyAngleZ", "PARAM_BODY_ANGLE_Z"),
     }
 
     EMOTIONS = ("normal", "happy", "sad", "shocked", "shy")
@@ -96,6 +99,8 @@ class Live2DViewer:
         idle_sway: bool = True,
         expressions: dict[str, str | None] | None = None,
         natural_idle: bool = True,
+        motion_enabled: bool = True,
+        speaking_motion_scale: float = 2.0,
     ) -> None:
         """モデル、表情、口パク、待機中の動作を設定する。"""
         self.model_path = Path(model_path).expanduser().resolve()
@@ -105,6 +110,15 @@ class Live2DViewer:
         self.mouth_param = str(mouth_param or "").strip()
         self.idle_sway = bool(idle_sway)
         self.natural_idle = bool(natural_idle)
+        self.motion_enabled = bool(motion_enabled)
+        try:
+            speaking_scale = float(speaking_motion_scale)
+        except (TypeError, ValueError):
+            speaking_scale = 2.0
+        self.speaking_motion_scale = (
+            max(0.0, min(5.0, speaking_scale))
+            if math.isfinite(speaking_scale) else 2.0
+        )
 
         self.expressions = dict(self.DEFAULT_EXPRESSIONS)
         if isinstance(expressions, dict):
@@ -122,6 +136,14 @@ class Live2DViewer:
         self._mouth_lock = threading.Lock()
         self._expression_lock = threading.Lock()
         self._state_lock = threading.Lock()
+        self._activity_lock = threading.Lock()
+        self._activity_state = "idle"
+        self._gaze_target_x = 0.0
+        self._gaze_target_y = 0.0
+        self._gaze_current_x = 0.0
+        self._gaze_current_y = 0.0
+        self._next_gaze_change = 0.0
+        self._last_motion_update = 0.0
 
         self._mouth_open = 0.0
         self._last_mouth_activity = time.monotonic()
@@ -137,6 +159,106 @@ class Live2DViewer:
         self._core_dll_handle: Any | None = None
         self._idle_motion_count = 0
         self._expression_names: set[str] = set()
+
+
+    ACTIVITY_STATES = {"idle", "thinking", "synthesizing", "speaking", "listening"}
+
+    def set_activity_state(self, state: str) -> None:
+        """会話状態を描画スレッドへ安全に通知する。"""
+        normalized = str(state or "idle").strip().casefold()
+        if normalized not in self.ACTIVITY_STATES:
+            logger.debug("未知のLive2D活動状態 %r をidleとして扱います。", state)
+            normalized = "idle"
+        with self._activity_lock:
+            self._activity_state = normalized
+            if normalized != "idle":
+                self._next_gaze_change = 0.0
+
+    def get_activity_state(self) -> str:
+        with self._activity_lock:
+            return self._activity_state
+
+    def compose_motion_offsets(
+        self, now: float, initial_time: float, activity: str,
+        mouth_open: float, resting: bool, rest_elapsed: float,
+        rest_gaze_phase: float,
+    ) -> dict[str, float]:
+        """全モーションを合成し、パラメータごとの加算値を1つだけ返す。"""
+        elapsed = now - initial_time
+        offsets: dict[str, float] = {}
+        speaking = activity == "speaking"
+        if self.idle_sway:
+            scale = self.speaking_motion_scale if speaking and self.motion_enabled else 1.0
+            for role, (_, amplitude, period, phase) in self.SWAY_PARAMETERS.items():
+                offsets[role] = amplitude * scale * math.sin(
+                    elapsed * 2.0 * math.pi / period + phase
+                )
+
+        # falseならv0.10.0相当の待機揺れと休憩中視線のみ。
+        if not self.motion_enabled:
+            if resting:
+                offsets["eye_ball_x"] = 0.16 * math.sin(
+                    rest_elapsed * 2.0 * math.pi / 11.0 + rest_gaze_phase
+                )
+                offsets["eye_ball_y"] = 0.10 * math.sin(
+                    rest_elapsed * 2.0 * math.pi / 14.0 + rest_gaze_phase * 0.7
+                )
+                phase = rest_elapsed % 29.0
+                offsets["angle_x"] = (
+                    1.2 * math.sin(math.pi * phase / 7.0) if phase < 7.0 else 0.0
+                )
+            return offsets
+
+        with self._activity_lock:
+            state = self._activity_state
+            if now >= self._next_gaze_change:
+                if state == "thinking":
+                    self._gaze_target_x = random.uniform(-0.42, 0.42)
+                    self._gaze_target_y = random.uniform(0.16, 0.42)
+                    delay = random.uniform(2.0, 3.8)
+                elif state == "synthesizing":
+                    self._gaze_target_x = random.uniform(-0.30, 0.30)
+                    self._gaze_target_y = random.uniform(-0.05, 0.28)
+                    delay = random.uniform(2.4, 4.2)
+                elif state == "listening":
+                    self._gaze_target_x = random.uniform(-0.20, 0.20)
+                    self._gaze_target_y = random.uniform(-0.12, 0.12)
+                    delay = random.uniform(3.0, 5.0)
+                else:
+                    self._gaze_target_x = random.uniform(-0.48, 0.48)
+                    self._gaze_target_y = random.uniform(-0.24, 0.24)
+                    delay = random.uniform(2.8, 5.2)
+                self._next_gaze_change = now + delay
+            dt = max(0.0, min(now - self._last_motion_update, 0.1)) if self._last_motion_update else 1.0 / 60.0
+            self._last_motion_update = now
+            blend = 1.0 - math.exp(-dt / 0.38)
+            self._gaze_current_x += (self._gaze_target_x - self._gaze_current_x) * blend
+            self._gaze_current_y += (self._gaze_target_y - self._gaze_current_y) * blend
+            gaze_x, gaze_y = self._gaze_current_x, self._gaze_current_y
+
+        if state == "speaking":
+            gaze_x *= 0.55
+            gaze_y *= 0.55
+        elif state == "thinking":
+            offsets["angle_x"] = offsets.get("angle_x", 0.0) + 2.0 * math.sin(elapsed * 0.72)
+            offsets["angle_y"] = offsets.get("angle_y", 0.0) + 1.8 + 0.8 * math.sin(elapsed * 0.48)
+            offsets["body_angle_x"] = offsets.get("body_angle_x", 0.0) + 0.55 * math.sin(elapsed * 0.65)
+        elif state == "synthesizing":
+            offsets["angle_x"] = offsets.get("angle_x", 0.0) + 1.0 * math.sin(elapsed * 0.9)
+            offsets["angle_y"] = offsets.get("angle_y", 0.0) + 0.7 * math.sin(elapsed * 0.62)
+        elif state == "speaking":
+            pulse = math.sin(elapsed * 5.8)
+            scale = self.speaking_motion_scale
+            offsets["angle_y"] = offsets.get("angle_y", 0.0) + scale * mouth_open * (2.6 + 1.2 * pulse)
+            offsets["angle_x"] = offsets.get("angle_x", 0.0) + scale * mouth_open * 0.9 * math.sin(elapsed * 3.0)
+            offsets["body_angle_x"] = offsets.get("body_angle_x", 0.0) + scale * mouth_open * 1.5 * math.sin(elapsed * 4.2)
+            offsets["body_angle_z"] = offsets.get("body_angle_z", 0.0) + scale * mouth_open * math.sin(elapsed * 2.6 + 0.8)
+        elif resting:
+            offsets["angle_x"] = offsets.get("angle_x", 0.0) + 1.2 * math.sin(elapsed * 0.20)
+
+        offsets["eye_ball_x"] = offsets.get("eye_ball_x", 0.0) + gaze_x
+        offsets["eye_ball_y"] = offsets.get("eye_ball_y", 0.0) + gaze_y
+        return offsets
 
     def _check_cancelled(self) -> None:
         """起動キャンセル要求を確認する。"""
@@ -399,7 +521,7 @@ class Live2DViewer:
                 logger.debug("感情表現パラメータ %s はモデルにありません。", role)
 
         resolved_natural: dict[str, str] = {}
-        if self.natural_idle:
+        if self.natural_idle or self.motion_enabled:
             for role, candidates in self.NATURAL_IDLE_PARAMETERS.items():
                 parameter_id = self._resolve_parameter_id(parameter_ids, candidates)
                 if parameter_id is not None:
@@ -598,6 +720,10 @@ class Live2DViewer:
             ):
                 self._last_mouth_activity = time.monotonic()
             self._mouth_open = clamped_value
+        if clamped_value >= 0.03:
+            with self._activity_lock:
+                if self._activity_state == "synthesizing":
+                    self._activity_state = "speaking"
 
     def _get_mouth_open(self) -> float:
         """描画スレッド用に口の開き具合を取得する。"""
@@ -821,10 +947,12 @@ class Live2DViewer:
                         self._get_mouth_open(),
                     )
 
-                # 20秒以上口が動いていない場合は、休憩状態へ移行する。
+                # 会話中は休憩状態へ入らず、無操作のidle時だけ自然な休憩へ移行する。
+                activity = self.get_activity_state()
                 _, last_mouth_activity = self._get_mouth_state()
                 resting = (
                     self.natural_idle
+                    and activity == "idle"
                     and now - last_mouth_activity >= self.NATURAL_IDLE_THRESHOLD
                 )
 
@@ -907,43 +1035,14 @@ class Live2DViewer:
                     )
                     model.SetParamById(breath_id, breath_value)
 
-                # AddParamByIdでIdleモーションに小さな揺れを重ねる。
-                if self.idle_sway and resolved_sway:
-                    elapsed = now - initial_time
-
-                    for role, parameter_id in resolved_sway.items():
-                        _, amplitude, period, phase = self.SWAY_PARAMETERS[role]
-                        sway_value = amplitude * math.sin(
-                            elapsed * 2.0 * math.pi / period + phase
-                        )
-                        model.AddParamById(parameter_id, sway_value)
-
-                # 休憩中は視線をゆっくり動かし、ときどき少し横を向く。
-                if resting:
-                    gaze_x_id = resolved_natural.get("eye_ball_x")
-                    if gaze_x_id is not None:
-                        gaze_x = 0.16 * math.sin(
-                            rest_elapsed * 2.0 * math.pi / 11.0 + rest_gaze_phase
-                        )
-                        model.AddParamById(gaze_x_id, gaze_x)
-
-                    gaze_y_id = resolved_natural.get("eye_ball_y")
-                    if gaze_y_id is not None:
-                        gaze_y = 0.10 * math.sin(
-                            rest_elapsed * 2.0 * math.pi / 14.0
-                            + rest_gaze_phase * 0.7
-                        )
-                        model.AddParamById(gaze_y_id, gaze_y)
-
-                    head_angle_id = resolved_natural.get("angle_x")
-                    if head_angle_id is not None:
-                        turn_phase = rest_elapsed % 29.0
-                        head_turn = (
-                            1.2 * math.sin(math.pi * turn_phase / 7.0)
-                            if turn_phase < 7.0
-                            else 0.0
-                        )
-                        model.AddParamById(head_angle_id, head_turn)
+                motion_offsets = self.compose_motion_offsets(
+                    now, initial_time, activity, self._get_mouth_open(),
+                    resting, rest_elapsed, rest_gaze_phase,
+                )
+                for role, value in motion_offsets.items():
+                    parameter_id = resolved_sway.get(role) or resolved_natural.get(role)
+                    if parameter_id is not None:
+                        model.AddParamById(parameter_id, value)
 
                 live2d.clearBuffer(0.96, 0.96, 0.98, 1.0)
                 model.Draw()
