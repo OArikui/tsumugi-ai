@@ -201,6 +201,7 @@ class ConversationWorker(QThread):
                         continue
                     try:
                         self._stt.start_recording()
+                        self._viewer.set_activity_state("listening")
                         self.recording_changed.emit(True)
                         self.status_changed.emit("聞き取り中...")
                     except Exception as exc:
@@ -213,6 +214,7 @@ class ConversationWorker(QThread):
                         continue
                     try:
                         self.status_changed.emit("文字起こし中...")
+                        self._viewer.set_activity_state("thinking")
                         self.recording_changed.emit(False)
                         recognized_text = self._stt.stop_recording_and_transcribe()
                         if recognized_text:
@@ -230,6 +232,7 @@ class ConversationWorker(QThread):
                 streaming_session = None
                 try:
                     self.status_changed.emit("考え中")
+                    self._viewer.set_activity_state("thinking")
                     use_streaming = (
                         self._streaming_enabled
                         and self._voicevox_connected
@@ -263,6 +266,7 @@ class ConversationWorker(QThread):
                     self.assistant_message.emit(spoken_text)
                     if self._voicevox_connected:
                         self.status_changed.emit("声を生成中")
+                        self._viewer.set_activity_state("synthesizing")
                         try:
                             if streaming_session is not None:
                                 streaming_session.finish(spoken_text)
@@ -297,6 +301,7 @@ class ConversationWorker(QThread):
                         streaming_session.cancel()
                     self._viewer.set_mouth_open(0.0)
                     self._viewer.set_emotion("normal")
+                    self._viewer.set_activity_state("idle")
                     self.turn_finished.emit()
                     if not self._stop_event.is_set():
                         self.status_changed.emit("待機中")
@@ -308,6 +313,7 @@ class ConversationWorker(QThread):
         finally:
             self._viewer.set_mouth_open(0.0)
             self._viewer.set_emotion("normal")
+            self._viewer.set_activity_state("idle")
             if self._stt is not None:
                 try:
                     self._stt.close()
