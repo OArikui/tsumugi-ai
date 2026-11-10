@@ -188,7 +188,7 @@ class Live2DViewer:
         offsets: dict[str, float] = {}
         speaking = activity == "speaking"
         if self.idle_sway:
-            scale = self.speaking_motion_scale if speaking else 1.0
+            scale = self.speaking_motion_scale if speaking and self.motion_enabled else 1.0
             for role, (_, amplitude, period, phase) in self.SWAY_PARAMETERS.items():
                 offsets[role] = amplitude * scale * math.sin(
                     elapsed * 2.0 * math.pi / period + phase
