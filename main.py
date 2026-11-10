@@ -19,7 +19,7 @@ from app.stt_whisper import SpeechToText
 from app.tts_voicevox import VoiceVoxTTS
 
 
-APP_VERSION = "0.9.1"
+APP_VERSION = "0.10.0"
 
 logger = logging.getLogger(__name__)
 
@@ -454,13 +454,30 @@ def run_cli(config: dict) -> int:
                     stt = None
                     continue
 
+            streaming_session = None
             try:
                 logger.info("LLMに問い合わせています。")
-                with ui.processing("AIの返答を待っています"):
-                    response = llm.chat(user_text)
+                use_streaming = (
+                    bool(config.get("tts_streaming_enabled", True))
+                    and bool(getattr(llm, "supports_streaming", False))
+                    and bool(config.get("tts_streaming_enabled", True))
+                )
+                if use_streaming:
+                    streaming_session = tts.start_streaming()
+                    with ui.processing("AIの返答を待っています"):
+                        response = llm.chat_streaming(
+                            user_text,
+                            streaming_session.feed_text,
+                            streaming_session.abort,
+                        )
+                else:
+                    with ui.processing("AIの返答を待っています"):
+                        response = llm.chat(user_text)
 
                 emotion, spoken_text = parse_emotion_response(response)
                 if not spoken_text:
+                    if streaming_session is not None:
+                        streaming_session.cancel()
                     logger.warning("LLMから読み上げ可能な本文が返されませんでした。")
                     if viewer is not None:
                         viewer.set_emotion("normal")
@@ -475,19 +492,28 @@ def run_cli(config: dict) -> int:
 
                 try:
                     with ui.processing("音声を合成して再生しています"):
-                        tts.speak(spoken_text)
+                        if streaming_session is not None:
+                            streaming_session.finish(spoken_text)
+                        else:
+                            tts.speak(spoken_text)
                 finally:
+                    if streaming_session is not None:
+                        streaming_session.cancel()
                     if viewer is not None:
                         viewer.set_mouth_open(0.0)
                         viewer.set_emotion("normal")
 
             except KeyboardInterrupt:
+                if streaming_session is not None:
+                    streaming_session.cancel()
                 logger.info("処理を中断しました。")
                 if viewer is not None:
                     viewer.set_mouth_open(0.0)
                     viewer.set_emotion("normal")
                 break
             except Exception as exc:
+                if streaming_session is not None:
+                    streaming_session.cancel()
                 if viewer is not None:
                     viewer.set_mouth_open(0.0)
                     viewer.set_emotion("normal")

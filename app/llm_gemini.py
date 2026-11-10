@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiPlaywright(ChatGPTPlaywright):
+    supports_streaming = True
     """Gemini Web (gemini.google.com) を操作するバックエンド。
 
     Edge の起動と CDP 接続、送信と返答待ちの仕組みは
