@@ -460,7 +460,6 @@ def run_cli(config: dict) -> int:
                 use_streaming = (
                     bool(config.get("tts_streaming_enabled", True))
                     and bool(getattr(llm, "supports_streaming", False))
-                    and bool(config.get("tts_streaming_enabled", True))
                 )
                 if use_streaming:
                     streaming_session = tts.start_streaming()
