@@ -1,5 +1,7 @@
 """春日部つむぎAIの起動・対話処理。"""
 
+from __future__ import annotations
+
 import logging
 import os
 import re
@@ -9,70 +11,132 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-import yaml
 
-from app.console_ui import ConsoleUI
-from app.llm_base import LLMBackend
-from app.llm_gemini import GeminiPlaywright
-from app.llm_playwright import ChatGPTPlaywright
-from app.live2d_viewer import Live2DViewer
-from app.stt_whisper import SpeechToText
-from app.tts_voicevox import VoiceVoxTTS
-
-
-APP_VERSION = "0.12.0"
+APP_VERSION = "0.12.1"
 
 logger = logging.getLogger(__name__)
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_LOG_FILE_HANDLER: logging.FileHandler | None = None
+_LOG_FILE_PATH: Path | None = None
 
-def setup_logging(config: dict | None = None) -> None:
-    """コンソールと、必要に応じて実行ごとのUTF-8ログファイルへ出力する。"""
-    log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+def _create_log_file_handler(log_dir: Path) -> tuple[logging.FileHandler, Path]:
+    """既存の命名規則でログファイルハンドラを作成する。"""
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = log_dir / f"tsumugi-{timestamp}.log"
+    suffix = 1
+    while log_path.exists():
+        log_path = log_dir / f"tsumugi-{timestamp}-{suffix:02d}.log"
+        suffix += 1
+
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    return handler, log_path
+
+
+def _initialize_bootstrap_logging() -> None:
+    """外部・アプリモジュールのimport前に標準ライブラリだけでログを準備する。"""
+    global _LOG_FILE_HANDLER, _LOG_FILE_PATH
+
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(logging.Formatter(log_format))
-    handlers = [console_handler]
-    log_path: Path | None = None
+    console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    handlers: list[logging.Handler] = [console_handler]
+    log_error: OSError | None = None
 
-    if config is not None and bool(config.get("log_to_file", True)):
-        try:
-            log_dir = Path(_resolve_project_path(config.get("log_dir", "logs")))
-            log_dir.mkdir(parents=True, exist_ok=True)
-
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            log_path = log_dir / f"tsumugi-{timestamp}.log"
-            suffix = 1
-            while log_path.exists():
-                log_path = log_dir / f"tsumugi-{timestamp}-{suffix:02d}.log"
-                suffix += 1
-
-            file_handler = logging.FileHandler(log_path, encoding="utf-8")
-            file_handler.setFormatter(logging.Formatter(log_format))
-            handlers.append(file_handler)
-        except OSError as exc:
-            logging.basicConfig(
-                level=logging.INFO,
-                format=log_format,
-                handlers=[console_handler],
-                force=True,
-            )
-            logging.getLogger(__name__).warning(
-                "ログファイルを作成できません。コンソール出力のみ継続します。原因: %s",
-                exc,
-            )
-            return
+    try:
+        _LOG_FILE_HANDLER, _LOG_FILE_PATH = _create_log_file_handler(
+            PROJECT_ROOT / "logs"
+        )
+        handlers.append(_LOG_FILE_HANDLER)
+    except OSError as exc:
+        log_error = exc
 
     logging.basicConfig(
         level=logging.INFO,
-        format=log_format,
+        format=LOG_FORMAT,
         handlers=handlers,
         force=True,
     )
-    if log_path is not None:
-        logging.getLogger(__name__).info("ログファイル: %s", log_path)
 
+    if _LOG_FILE_PATH is not None:
+        logger.info("ログファイル: %s", _LOG_FILE_PATH)
+    elif log_error is not None:
+        logger.warning(
+            "ログファイルを作成できません。コンソール出力のみ継続します。原因: %s",
+            log_error,
+        )
+
+
+_initialize_bootstrap_logging()
+
+# import時の例外も、アプリ本体の読み込み前に準備したログへtracebackを記録する。
+try:
+    import yaml
+
+    from app.console_ui import ConsoleUI
+    from app.llm_base import LLMBackend
+    from app.llm_gemini import GeminiPlaywright
+    from app.llm_playwright import ChatGPTPlaywright
+    from app.live2d_viewer import Live2DViewer
+    from app.stt_whisper import SpeechToText
+    from app.tts_voicevox import VoiceVoxTTS
+except Exception:
+    logger.exception("起動時のモジュール読み込みに失敗しました。")
+    logging.shutdown()
+    raise
+
+
+def setup_logging(config: dict | None = None) -> None:
+    """起動前に準備したログを維持し、設定に応じてファイル出力先を調整する。"""
+    global _LOG_FILE_HANDLER, _LOG_FILE_PATH
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    # 初期化時にすでにコンソール・ファイルハンドラを登録済み。
+    if config is None:
+        return
+
+    if not bool(config.get("log_to_file", True)):
+        if _LOG_FILE_HANDLER is not None:
+            root_logger.removeHandler(_LOG_FILE_HANDLER)
+            _LOG_FILE_HANDLER.close()
+            _LOG_FILE_HANDLER = None
+            _LOG_FILE_PATH = None
+        return
+
+    try:
+        log_dir = Path(_resolve_project_path(config.get("log_dir", "logs"))).resolve()
+        if (
+            _LOG_FILE_HANDLER is not None
+            and _LOG_FILE_PATH is not None
+            and _LOG_FILE_PATH.parent.resolve() == log_dir
+        ):
+            return
+
+        new_handler, new_path = _create_log_file_handler(log_dir)
+    except OSError as exc:
+        logger.warning(
+            "ログファイルを作成できません。既存のログ出力を維持します。原因: %s",
+            exc,
+        )
+        return
+
+    old_handler = _LOG_FILE_HANDLER
+    root_logger.addHandler(new_handler)
+    _LOG_FILE_HANDLER = new_handler
+    _LOG_FILE_PATH = new_path
+
+    if old_handler is not None:
+        root_logger.removeHandler(old_handler)
+        old_handler.close()
+
+    logger.info("ログファイル: %s", new_path)
 
 def load_config() -> dict:
     """config.yamlを読み込む。"""
@@ -589,4 +653,12 @@ def run_cli(config: dict) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        exit_code = main()
+    except Exception:
+        logger.exception("起動処理中に未捕捉の例外が発生しました。")
+        exit_code = 1
+    finally:
+        logging.shutdown()
+
+    sys.exit(exit_code)
