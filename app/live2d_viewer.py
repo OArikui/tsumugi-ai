@@ -719,6 +719,10 @@ class Live2DViewer:
             ):
                 self._last_mouth_activity = time.monotonic()
             self._mouth_open = clamped_value
+        if clamped_value >= 0.03:
+            with self._activity_lock:
+                if self._activity_state == "synthesizing":
+                    self._activity_state = "speaking"
 
     def _get_mouth_open(self) -> float:
         """描画スレッド用に口の開き具合を取得する。"""
@@ -942,10 +946,12 @@ class Live2DViewer:
                         self._get_mouth_open(),
                     )
 
-                # 20秒以上口が動いていない場合は、休憩状態へ移行する。
+                # 会話中は休憩状態へ入らず、無操作のidle時だけ自然な休憩へ移行する。
+                activity = self.get_activity_state()
                 _, last_mouth_activity = self._get_mouth_state()
                 resting = (
                     self.natural_idle
+                    and activity == "idle"
                     and now - last_mouth_activity >= self.NATURAL_IDLE_THRESHOLD
                 )
 
@@ -1028,7 +1034,6 @@ class Live2DViewer:
                     )
                     model.SetParamById(breath_id, breath_value)
 
-                activity = self.get_activity_state()
                 motion_offsets = self.compose_motion_offsets(
                     now, initial_time, activity, self._get_mouth_open(),
                     resting, rest_elapsed, rest_gaze_phase,
