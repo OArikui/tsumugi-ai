@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-APP_VERSION = "0.12.1"
+APP_VERSION = "0.12.2"
 
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent

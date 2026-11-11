@@ -29,6 +29,7 @@ class Live2DViewer:
 
     PARAMETER_CANDIDATES = {
         "mouth": ("ParamMouthOpenY", "PARAM_MOUTH_OPEN_Y"),
+        "mouth_form": ("ParamMouthForm", "PARAM_MOUTH_FORM"),
         "left_eye": ("ParamEyeLOpen", "PARAM_EYE_L_OPEN"),
         "right_eye": ("ParamEyeROpen", "PARAM_EYE_R_OPEN"),
         "breath": ("ParamBreath", "PARAM_BREATH"),
@@ -101,6 +102,16 @@ class Live2DViewer:
         "eye_ball_x",
         "eye_ball_y",
     )
+    RESTING_POSE = {
+        "angle_x": 0.0,
+        "angle_y": -1.8,
+        "angle_z": -3.5,
+        "body_angle_x": -0.25,
+        "body_angle_z": -0.7,
+        "eye_ball_x": 0.0,
+        "eye_ball_y": -0.12,
+    }
+    RESTING_BREATHING_PERIOD = 5.6
     POSE_BLEND_SECONDS = 0.48
     BREATHING_SWAY_SCALE = 0.10
     GAZE_HEAD_COUPLING_X = 3.0
@@ -348,7 +359,7 @@ class Live2DViewer:
                 resting, rest_elapsed, rest_gaze_phase,
             )
         return self._compose_pose_offsets(
-            now, initial_time, activity, mouth_open,
+            now, initial_time, activity, mouth_open, resting, rest_elapsed,
         )
 
     def _compose_pose_offsets(
@@ -357,25 +368,37 @@ class Live2DViewer:
         initial_time: float,
         activity: str,
         mouth_open: float,
+        resting: bool,
+        rest_elapsed: float,
     ) -> dict[str, float]:
-        """状態ごとのポーズ目標を選択し、指数ブレンドで滑らかに追従させる。"""
-        state = activity if activity in self.ACTIVITY_STATES else "idle"
+        """状態ごとのポーズを合成し、休憩中は眠る姿勢へ滑らかに移行する。"""
         elapsed = now - initial_time
         with self._activity_lock:
-            state = self._activity_state
-            if state not in self.ACTIVITY_STATES:
-                state = "idle"
+            active_state = self._activity_state
+            if active_state not in self.ACTIVITY_STATES:
+                active_state = "idle"
+            state = "resting" if resting else active_state
             speaking = state == "speaking"
 
-            if self._pose_state != state or now >= self._pose_next_change:
-                candidates = self.POSE_SETS.get(state, self.POSE_SETS["idle"])
-                available = [
-                    candidate for candidate in candidates
-                    if candidate[0] != self._pose_name
-                ]
-                pose_name, pose = random.choice(available or candidates)
+            if (
+                self._pose_state != state
+                or (not resting and now >= self._pose_next_change)
+            ):
+                if resting:
+                    pose_name = "resting:sleep"
+                    pose = self.RESTING_POSE
+                else:
+                    candidates = self.POSE_SETS.get(
+                        state, self.POSE_SETS["idle"]
+                    )
+                    available = [
+                        candidate for candidate in candidates
+                        if candidate[0] != self._pose_name
+                    ]
+                    pose_name, pose = random.choice(available or candidates)
+
                 speaking_scale = (
-                    self.speaking_motion_scale if state == "speaking" else 1.0
+                    self.speaking_motion_scale if speaking else 1.0
                 )
                 target = {
                     field: float(pose.get(field, 0.0)) * speaking_scale
@@ -397,8 +420,11 @@ class Live2DViewer:
                 self._pose_target = target
                 self._pose_name = pose_name
                 self._pose_state = state
-                interval = self.POSE_INTERVALS.get(state, (2.8, 5.2))
-                self._pose_next_change = now + random.uniform(*interval)
+                if resting:
+                    self._pose_next_change = float("inf")
+                else:
+                    interval = self.POSE_INTERVALS.get(state, (2.8, 5.2))
+                    self._pose_next_change = now + random.uniform(*interval)
 
             dt = (
                 max(0.0, min(now - self._last_motion_update, 0.1))
@@ -413,8 +439,16 @@ class Live2DViewer:
             pose_values = dict(self._pose_current)
 
         offsets = pose_values
-        if self.idle_sway:
-            # 既存の周期揺れは呼吸に合わせた小さな微振動としてのみ残す。
+        if resting:
+            # 目を閉じた姿勢を保ち、呼吸に合わせたごく小さな上下動だけを加える。
+            breath = math.sin(
+                rest_elapsed * 2.0 * math.pi / self.RESTING_BREATHING_PERIOD
+            )
+            offsets["angle_y"] += 0.16 * breath
+            offsets["body_angle_x"] += 0.10 * breath
+            offsets["body_angle_z"] += 0.08 * breath
+        elif self.idle_sway:
+            # 通常待機の周期揺れは呼吸に合わせた小さな微振動として残す。
             sway_scale = self.BREATHING_SWAY_SCALE * (
                 self.speaking_motion_scale if speaking else 1.0
             )
@@ -451,8 +485,26 @@ class Live2DViewer:
         rest_elapsed: float,
         rest_gaze_phase: float,
     ) -> dict[str, float]:
-        """ポーズ遷移を無効にしたときのv0.11.0のサイン波モーション。"""
+        """ポーズ遷移を無効にした場合も、休憩中は眠る姿勢を優先する。"""
         elapsed = now - initial_time
+        with self._activity_lock:
+            state = self._activity_state
+            speaking = state == "speaking"
+
+        if resting:
+            breath = math.sin(
+                rest_elapsed * 2.0 * math.pi / self.RESTING_BREATHING_PERIOD
+            )
+            return {
+                "angle_x": self.RESTING_POSE["angle_x"],
+                "angle_y": self.RESTING_POSE["angle_y"] + 0.16 * breath,
+                "angle_z": self.RESTING_POSE["angle_z"],
+                "body_angle_x": self.RESTING_POSE["body_angle_x"] + 0.10 * breath,
+                "body_angle_z": self.RESTING_POSE["body_angle_z"] + 0.08 * breath,
+                "eye_ball_x": self.RESTING_POSE["eye_ball_x"],
+                "eye_ball_y": self.RESTING_POSE["eye_ball_y"],
+            }
+
         offsets: dict[str, float] = {}
         if self.idle_sway:
             scale = self.speaking_motion_scale if speaking else 1.0
@@ -513,8 +565,6 @@ class Live2DViewer:
             offsets["angle_x"] = offsets.get("angle_x", 0.0) + scale * mouth_open * 0.9 * math.sin(elapsed * 3.0)
             offsets["body_angle_x"] = offsets.get("body_angle_x", 0.0) + scale * mouth_open * 1.5 * math.sin(elapsed * 4.2)
             offsets["body_angle_z"] = offsets.get("body_angle_z", 0.0) + scale * mouth_open * math.sin(elapsed * 2.6 + 0.8)
-        elif resting:
-            offsets["angle_x"] = offsets.get("angle_x", 0.0) + 1.2 * math.sin(elapsed * 0.20)
 
         # 旧モードでも視線の移動に頭を少し追従させる。
         offsets["angle_x"] = offsets.get("angle_x", 0.0) + gaze_x * self.GAZE_HEAD_COUPLING_X
@@ -1237,6 +1287,8 @@ class Live2DViewer:
             active_face_preset: dict[str, float] = {}
 
             rest_gaze_phase = random.uniform(0.0, math.tau)
+            previous_resting = False
+            last_resting_expression_revision: int | None = None
 
             with self._state_lock:
                 self._startup_success = True
@@ -1277,6 +1329,57 @@ class Live2DViewer:
 
                 model.Update(delta_time)
 
+                # 会話中は休憩状態へ入らず、無操作のidle時だけ自然な休憩へ移行する。
+                activity = self.get_activity_state()
+                _, last_mouth_activity = self._get_mouth_state()
+                resting = (
+                    self.natural_idle
+                    and activity == "idle"
+                    and now - last_mouth_activity >= self.NATURAL_IDLE_THRESHOLD
+                )
+
+                if resting and not previous_resting:
+                    stop_motions = getattr(model, "StopAllMotions", None)
+                    if callable(stop_motions):
+                        try:
+                            stop_motions()
+                            reset_pose = getattr(model, "ResetPose", None)
+                            if callable(reset_pose):
+                                reset_pose()
+                            logger.info("Live2Dの休憩中はモデル内のIdleモーションと直前のポーズをリセットします。")
+                        except Exception as exc:
+                            logger.warning("休憩中のIdleモーションを停止できません: %s", exc)
+                elif not resting and previous_resting and self._idle_motion_count > 0:
+                    try:
+                        model.StartMotion(
+                            "Idle",
+                            0,
+                            live2d.MotionPriority.IDLE,
+                        )
+                        logger.info("Live2Dの通常待機モーションを再開しました。")
+                    except Exception as exc:
+                        logger.warning("通常待機モーションを再開できません: %s", exc)
+
+                if resting and (
+                    not previous_resting
+                    or expression_revision != last_resting_expression_revision
+                ):
+                    # 直前の会話が笑顔でも、休憩へ入るときは通常表情へ戻す。
+                    (
+                        use_face_fallback,
+                        active_face_preset,
+                    ) = self._activate_expression(
+                        model,
+                        "normal",
+                        None,
+                        resolved_face,
+                    )
+                    last_resting_expression_revision = expression_revision
+                elif not resting:
+                    last_resting_expression_revision = None
+
+                previous_resting = resting
+
                 if use_face_fallback:
                     self._apply_face_preset(
                         model,
@@ -1288,17 +1391,12 @@ class Live2DViewer:
                 if mouth_id is not None:
                     model.SetParamById(
                         mouth_id,
-                        self._get_mouth_open(),
+                        0.0 if resting else self._get_mouth_open(),
                     )
 
-                # 会話中は休憩状態へ入らず、無操作のidle時だけ自然な休憩へ移行する。
-                activity = self.get_activity_state()
-                _, last_mouth_activity = self._get_mouth_state()
-                resting = (
-                    self.natural_idle
-                    and activity == "idle"
-                    and now - last_mouth_activity >= self.NATURAL_IDLE_THRESHOLD
-                )
+                mouth_form_id = resolved_parameters.get("mouth_form")
+                if resting and mouth_form_id is not None:
+                    model.SetParamById(mouth_form_id, 0.0)
 
                 rest_eye_open, rest_elapsed = self.update_rest_eye_open(
                     now,
@@ -1335,10 +1433,13 @@ class Live2DViewer:
                 breath_id = resolved_parameters.get("breath")
                 if breath_id is not None:
                     elapsed = now - initial_time
+                    breathing_period = (
+                        self.RESTING_BREATHING_PERIOD if resting else 4.5
+                    )
                     breath_value = (
                         0.5
                         + 0.5 * math.sin(
-                            elapsed * 2.0 * math.pi / 4.5
+                            elapsed * 2.0 * math.pi / breathing_period
                         )
                     )
                     model.SetParamById(breath_id, breath_value)
