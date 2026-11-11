@@ -1343,7 +1343,10 @@ class Live2DViewer:
                     if callable(stop_motions):
                         try:
                             stop_motions()
-                            logger.info("Live2Dの休憩中はモデル内のIdleモーションを停止します。")
+                            reset_pose = getattr(model, "ResetPose", None)
+                            if callable(reset_pose):
+                                reset_pose()
+                            logger.info("Live2Dの休憩中はモデル内のIdleモーションと直前のポーズをリセットします。")
                         except Exception as exc:
                             logger.warning("休憩中のIdleモーションを停止できません: %s", exc)
                 elif not resting and previous_resting and self._idle_motion_count > 0:
